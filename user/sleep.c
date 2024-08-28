@@ -1,7 +1,6 @@
 #include "kernel/types.h" // 包含系统中常用的基本数据类型的定义
 #include "kernel/stat.h"  // 包含文件状态相关的结构和常量定义
 #include "user/user.h"    // 包含用户空间程序所需的系统调用声明
-#include <stdlib.h>       // 包含标准库的函数声明
 
 // 主函数入口，argc 是命令行参数的个数，argv 是参数的数组
 int main(int argc, char *argv[])
@@ -13,13 +12,11 @@ int main(int argc, char *argv[])
         exit(1);                                    // 以错误码1退出程序
     }
 
-    // 将字符串参数转化为整数，存储在 time 变量中
-    // ++argv 将指针移动到 argv[1]，即用户输入的第一个参数，atoi 将其转换为整数
-    char *endptr;
-    int time = strtol(argv[1], &endptr, 10);
+    // 使用 atoi 函数将字符串参数转化为整数
+    int time = atoi(argv[1]);
 
     // 检查转换后的结果是否合法
-    if (*endptr != '\0' || time <= 0)
+    if (time <= 0)
     {
         fprintf(2, "Error: Invalid time argument. Please enter a positive integer.\n");
         exit(1);
@@ -35,3 +32,4 @@ int main(int argc, char *argv[])
     // 程序执行完毕，正常退出
     exit(0);
 }
+
