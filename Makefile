@@ -190,6 +190,8 @@ UPROGS=\
 	$U/_zombie\
 	$U/_sleep\
 #添加实现的用户级sleep函数
+	$U/_pingpong\
+#添加体验管道功能的pingpong程序
 
 
 
