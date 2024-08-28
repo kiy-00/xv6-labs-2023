@@ -2,6 +2,10 @@
 
 [TOC]
 
+## github仓库地址
+
+https://github.com/kiy-00/xv6-labs-2023.git
+
  ## 初识xv6
 
 ### xv6与Unix
@@ -104,7 +108,7 @@
 1. **父进程的返回值**：
    - 对于父进程，`fork` 的返回值是子进程的PID。操作系统在创建子进程时，知道新进程的PID，因此可以直接将这个值返回给父进程。
 2. **子进程的返回值**：
-   - 在创建子进程时，操作系统复制了父进程的内存和执行状态。但是，为了让子进程能够正确识别自身是新创建的子进程，而不是继续执行的父进程，操作系统将 `fork` 函数在子进程中的返回值设为 `0`。这是通过修改子进程的寄存器状态来实现的。
+   - 在创建子进程时，操作系统复制了父进程的内存和执行状态。但是，为了让子进程能够正确识别自身是新创建的子进程，而不是继续执行的父进程，操作系统将 `fork` 函数在子进程中的返回值设为 `0`。==这是通过修改子进程的寄存器状态来实现的==。
 
 ##### 3. 技术实现细节
 
@@ -387,7 +391,7 @@ int main(int argc, char *argv[])
 
 ##### 总结
 
-- **Shell 负责重定向**：输出重定向是在 Shell 层面完成的，因此 `cat` 的代码中不需要关心重定向的问题。`cat` 只是按照它的逻辑从文件或标准输入读取数据并输出到标准输出，并在出现错误时写入标准错误输出。实际的重定向由 Shell 在命令执行之前处理。
+- **Shell 负责重定向**：==输出重定向是在 Shell 层面完成的==，因此 `cat` 的代码中不需要关心重定向的问题。`cat` 只是按照它的逻辑从文件或标准输入读取数据并输出到标准输出，并在出现错误时写入标准错误输出。实际的重定向由 Shell 在命令执行之前处理。
 - **代码与重定向的关系**：`cat` 程序的代码只是单纯地使用标准文件描述符进行输入输出操作，至于这些文件描述符实际指向哪里（终端、文件或其他设备），由 Shell 根据重定向符来决定。
 
 #### dup()
@@ -433,7 +437,7 @@ if(fork() == 0) {
 ```
 
 - `fork` 之后的文件描述符：
-  - 当 `fork()` 创建一个新的子进程时，子进程继承了父进程的文件描述符表。因此，子进程和父进程共享同一个文件描述符表项，包括文件偏移量。
+  - ==当 `fork()` 创建一个新的子进程时，子进程继承了父进程的文件描述符表。因此，子进程和父进程共享同一个文件描述符表项，包括文件偏移量==。
   - 子进程写入 "hello " 后，文件偏移量会更新。当父进程在 `wait()` 之后写入 "world\n" 时，会继续从子进程写入后的偏移量开始，结果是 "hello world"。
 
 ##### 通过 `dup` 实现重定向
@@ -450,7 +454,7 @@ if(fork() == 0) {
 
 ##### 总结
 
-- **`dup` 创建新的文件描述符**：它返回一个与原文件描述符完全不同的新文件描述符，但它们指向相同的文件，并且共享文件偏移量。
+- **`dup` 创建新的文件描述符**：==它返回一个与原文件描述符完全不同的新文件描述符，但它们指向相同的文件，并且共享文件偏移量==。
 - **共享文件偏移量**：这意味着对任一文件描述符的读写操作会影响另一个文件描述符的偏移量。
 - **应用场景**：`dup` 和 `fork` 结合使用时，可以实现复杂的 I/O 重定向逻辑，比如将输出重定向到文件或者将错误输出和标准输出合并到同一个文件中。
 
@@ -635,7 +639,7 @@ if(fork() == 0) {  // 创建一个子进程。如果 fork() 返回 0，表示这
 
 #### 举例说明
 
-在你之前提供的代码中：
+在之前提供的代码中：
 
 ```c
 write(p[1], "hello world\n", 12);
@@ -675,7 +679,6 @@ echo hello world > /tmp/xyz; wc < /tmp/xyz
   ，结果是：
 
   ```
-  复制代码
   hello world
   ```
 
@@ -717,14 +720,9 @@ echo hello world > /tmp/xyz; wc < /tmp/xyz
 
 3. **最终输出**：
 
-   - ```
-     wc
-     ```
-
-      命令将结果输出到终端，通常是这样的格式：
+   - 命令将结果输出到终端，通常是这样的格式：
 
      ```
-     复制代码
      1 2 12
      ```
 
@@ -807,7 +805,1741 @@ xv6 关于文件系统的操作都被实现为用户程序，诸如 `mkdir`，`l
 
 有一个例外，那就是 `cd`，它是在 shell 中实现的（8016）。`cd` 必须改变 shell 自身的当前工作目录。如果 `cd` 作为一个普通命令执行，那么 shell 就会 `fork` 一个子进程，而子进程会运行 `cd`，`cd` 只会改变*子进程*的当前工作目录。父进程的工作目录保持原样。
 
+### 进程
+
+xv6 使用页表（由硬件实现）来为每个进程提供其独有的地址空间。页表将*虚拟地址*（x86 指令所使用的地址）翻译（或说“映射”）为*物理地址*（处理器芯片向主存发送的地址）。
+
+![虚拟地址空间](../xv6-labs-2023/docs/img/虚拟地址空间.png)
+
+xv6 为每个进程维护了不同的页表，这样就能够合理地定义进程的地址空间了。如图表1-1所示，一片地址空间包含了从虚拟地址0开始的*用户内存*。它的地址最低处放置进程的指令，接下来则是全局变量，栈区，以及一个用户可按需拓展的“堆”区（malloc 用）。
+
+和上面提到的*用户内存*一样，内核的指令和数据也会被进程映射到每个进程的地址空间中。当进程使用系统调用时，系统调用实际上会在进程地址空间中的内核区域执行。这种设计使得内核的系统调用代码可以直接指向用户内存。为了给用户留下足够的内存空间，xv6 将内核映射到了地址空间的高地址处，即从 0x80100000 开始。
+
+xv6 使用结构体 `struct proc` 来维护一个进程的状态，其中最为重要的状态是进程的页表，内核栈，当前运行状态。我们接下来会用 `p->xxx` 来指代 `proc` 结构中的元素。
+
+每个进程都有一个运行线程（或简称为*线程*）来执行进程的指令。线程可以被暂时挂起，稍后再恢复运行。系统在进程之间切换实际上就是挂起当前运行的线程，恢复另一个进程的线程。线程的大多数状态（局部变量和函数调用的返回地址）都保存在线程的栈上。
+
+每个进程都有用户栈和内核栈（`p->kstack`）。当进程运行用户指令时，只有其用户栈被使用，其内核栈则是空的。然而当进程（通过系统调用或中断）进入内核时，内核代码就在进程的内核栈中执行；进程处于内核中时，其用户栈仍然保存着数据，只是暂时处于不活跃状态。进程的线程交替地使用着用户栈和内核栈。要注意内核栈是用户代码无法使用的，这样即使一个进程破坏了自己的用户栈，内核也能保持运行。
+
+当进程使用系统调用时，处理器转入内核栈中，提升硬件的特权级，然后运行系统调用对应的内核代码。当系统调用完成时，又从内核空间回到用户空间：降低硬件特权级，转入用户栈，恢复执行系统调用指令后面的那条用户指令。线程可以在内核中“阻塞”，等待 I/O, 在 I/O 结束后再恢复运行。
+
+`p->state` 指示了进程的状态：新建、准备运行、运行、等待 I/O 或退出状态中。
+
+`p->pgdir` 以 x86 硬件要求的格式保存了进程的页表。xv6 让分页硬件在进程运行时使用 `p->pgdir`。进程的页表还记录了保存进程内存的物理页的地址。
+
+#### 内核的指令和数据被映射到每个进程地址空间中的设计优势
+
+在操作系统中，将内核的指令和数据映射到每个进程的地址空间中是一种常见的设计，这种设计具有多个好处：
+
+1. **简化系统调用的执行**：
+   - 当进程调用系统调用时，处理器会切换到内核模式，直接在当前进程的地址空间中执行内核代码。这种方式使得系统调用的实现更加高效，因为它不需要切换到完全不同的地址空间。通过这种设计，系统调用可以直接访问用户进程的地址空间中的数据，而无需复杂的地址空间切换。
+2. **提供内核的安全性和隔离性**：
+   - 虽然内核映射在每个进程的地址空间中，但它通常位于高地址区域，并且只有在内核模式下才能访问。这意味着即使进程可以看到内核的映射，它也无法在用户模式下访问这些内核地址，从而保护了内核的安全性。只有在处理器切换到内核模式时，内核代码和数据才是可访问的。
+3. **提高内存管理的灵活性**：
+   - 通过这种设计，内核可以更灵活地管理内存，尤其是当需要在用户态和内核态之间共享数据时。例如，系统调用可以直接在进程的地址空间中操作数据，而不需要复杂的内存拷贝。
+4. **避免多次加载内核**：
+   - ==由于内核代码和数据在每个进程的地址空间中都是同一个映射（映射到相同的物理内存）==，操作系统不需要为每个进程分别加载内核代码。这不仅节省了内存，而且保证了所有进程使用的都是同一份内核代码，确保了内核的一致性和统一性。
+
+#### 为什么不将内核储存在固定的地方？
+
+尽管将内核储存在一个固定的地方似乎可以减少映射的复杂性，但这种设计有其缺点：
+
+1. **地址空间的灵活性**：
+   - 通过将内核映射到每个进程的地址空间，操作系统可以灵活地控制内核和用户态的内存分配，并能够根据需要调整内核和用户空间的边界。例如，在不同的系统中，内核的映射地址可以不同，这样可以更好地适应不同的硬件配置。
+2. **性能优化**：
+   - 现代处理器通常具有地址空间隔离功能，通过将内核映射到每个进程的地址空间，可以更高效地进行上下文切换。处理器可以快速切换进程而不需要完全刷新 TLB（Translation Lookaside Buffer），从而提高系统性能。
+3. **安全性**：
+   - 如果内核位于一个全局固定的地方，那么所有进程都可能更容易尝试访问该区域。通过将内核映射到每个进程的地址空间并将其放置在高地址区域，可以确保即使进程发生越界访问，也只能在它自己的地址空间中，进一步增强了系统的安全性。
+
+#### 总结
+
+将内核的指令和数据映射到每个进程的地址空间中，这种设计不仅提高了系统调用的执行效率和内存管理的灵活性，还增强了系统的安全性，同时有助于提升系统整体的性能。这种方式使得内核可以被所有进程共享，减少了系统开销，并确保了内核代码的一致性和统一性。
+
+#### PC启动过程
+
+##### 总结与解释
+
+**1. 内核代码的物理位置和映射：**
+
+- **物理位置**：当PC启动时，boot loader将xv6内核从磁盘加载到物理内存的地址0x100000处。内核代码物理上存储在这个低地址处，而不是在内核指令和数据通常应该存储的高地址（0x80100000）处，因为许多小型机器没有足够的物理内存。
+- **虚拟地址映射**：为了让内核能够正常运行，`entry`代码设置了页表，将虚拟地址0x80000000（KERNBASE）开始的高地址映射到实际的物理地址0x0处。这种映射使得内核代码在虚拟地址空间中运行时，实际上是在访问物理内存中的低地址。
+- **每个进程的内核代码存储**：每个进程的内核代码并不是实际存储在进程的内存中，而是通过页表映射到同一块物理内存区域。这意味着所有进程共享同一份内核代码，它们的地址空间中都映射了内核的高地址区域，但只有在进入内核模式时，进程才能访问这些区域。
+
+**2. 页表的创建与作用：**
+
+- **页表创建**：在内核启动的过程中，`entry`代码设置了初始的页表。这个页表将内核的高地址区域映射到物理内存的低地址处，允许内核代码在高地址运行，同时实际访问的是低地址的物理内存。
+- **页表作用**：页表的主要作用是将虚拟地址翻译为物理地址。通过这种映射，操作系统可以将虚拟地址空间中的内核代码和数据映射到物理内存中的实际位置。页表的使用确保了内核的虚拟地址空间独立于物理内存的实际布局。
+
+**3. 操作系统启动和初始化过程：**
+
+- **1. 计算机加电**：PC启动并开始执行固件（BIOS或UEFI），进行硬件初始化并寻找启动设备（如硬盘）。
+- **2. 加载boot loader**：BIOS从启动设备的主引导记录（MBR）中加载boot loader到内存，并开始执行boot loader代码。
+- **3. 加载内核**：boot loader将xv6内核从磁盘加载到物理内存的0x100000处。
+- **4. 设置页表**：`entry`代码设置了初始的页表，将虚拟地址0x80000000映射到物理地址0x0处，使得内核代码可以在虚拟地址的高地址运行。
+- **5. 启用分页**：将页表地址加载到控制寄存器%cr3中，并通过设置%cr0中的CR0_PG标志位启用分页。
+- **6. 切换到内核代码**：`entry`将栈指针%esp指向一段高地址的内存，并通过间接跳转到内核的main函数。这时，内核已经完全运行在高地址的虚拟内存空间中，而实际操作的是物理内存中的低地址。
+- **7. 内核初始化**：==内核的main函数开始执行，进行各项初始化工作==，如设置中断向量表、初始化硬件设备、创建空闲进程等。初始化完成后，内核开始调度进程，进入正常运行状态。
+
+##### 总结
+
+在PC启动并完成操作系统初始化的过程中，内核代码首先被加载到物理内存的低地址处。通过页表的设置，虚拟地址空间中的内核代码被映射到实际的物理内存，从而实现了高效的地址转换和内存管理。每个进程的内核代码并不是实际存储在它们的地址空间中，而是通过映射共享同一份内核代码。操作系统通过分页机制保证了虚拟地址空间与物理内存的灵活映射，同时保护了内核的安全性和独立性。
+
+#### 创建第一个进程的过程
+
+在 xv6 中，创建第一个进程是通过调用 `userinit` 函数来实现的。这个过程不使用 `fork` 系统调用，而是直接手动创建并初始化第一个进程。下面是逐步说明创建第一个进程的过程：
+
+1. **调用 `userinit` 函数**：
+
+   - 在操作系统启动时，`main` 函数初始化了一些设备和子系统后，通过调用 `userinit` 来创建第一个进程。
+
+2. **调用 `allocproc` 函数**：
+
+   - `userinit` 首先调用 `allocproc` 函数来分配和初始化一个新的进程结构体（`struct proc`）。
+   - `allocproc` 会在进程表（`ptable`）中找到一个未使用的槽位，将其状态设置为 `EMBRYO`，并为该进程分配一个唯一的 `pid`。
+   - 然后，它为进程的内核栈分配内存，并初始化内核栈，以便该进程能够在内核中执行。
+
+3. **设置内核栈**：
+
+   - `allocproc` 设置了新进程的内核栈，使得进程第一次运行时，会“返回”到用户空间。具体来说，它将进程的内核栈设置为指向 `forkret` 函数，这个函数会返回到 `trapret`，从而使得进程能够正确地切换到用户模式。
+   - 内核栈顶部会保存一个 `trapframe` 结构体，用于存放用户模式下的寄存器状态。
+
+4. **设置页表**：
+
+   - `userinit` 调用 `setupkvm` 函数，为新进程创建一个只映射内核区的页表。这个页表将内核的高地址部分映射到物理内存中，为内核提供了访问内存的能力。
+   - 接下来，`userinit` 调用 `inituvm` 函数，分配一页物理内存，并将进程的虚拟地址 0 映射到这段物理内存。这段内存中包含的是 `initcode.S` 中的初始化代码。
+
+5. **初始化 `trapframe`**：
+
+   - ```
+     userinit
+     ```
+
+      设置 
+
+     ```
+     trapframe
+     ```
+
+      结构体中的寄存器状态，使得新进程在第一次运行时会从用户模式下的地址 0 开始执行。这些寄存器包括：
+
+     - `%cs`：代码段寄存器，指向用户代码段。
+     - `%ds`、`%es`、`%ss`：数据段寄存器，指向用户数据段。
+     - `%esp`：栈指针，指向进程的最大有效虚拟内存。
+     - `eip`：指令指针，指向初始化代码的入口点，即地址 0。
+
+6. **设置进程名称和工作目录**：
+
+   - `userinit` 将 `p->name` 设置为 `initcode`，以方便调试。
+   - 同时，将 `p->cwd` 设置为进程的当前工作目录。
+
+7. **设置进程状态为 `RUNNABLE`**：
+
+   - 一旦进程的初始化完成，`userinit` 将该进程的状态设置为 `RUNNABLE`，使得该进程能够被调度执行。
+
+#### 为什么没有使用 `fork`？
+
+在创建第一个进程时，操作系统并没有使用 `fork` 系统调用，原因如下：
+
+1. **`fork` 依赖于已有的进程**：`fork` 是用来复制一个已经存在的进程来创建新进程的。在系统启动时，第一个进程还不存在，因此无法使用 `fork`。
+2. **初始化系统状态**：第一个进程是操作系统用来启动系统的基础。通过手动创建第一个进程，操作系统能够完全控制进程的初始化状态，包括内核栈、页表、寄存器等。
+
+#### 总结
+
+创建第一个进程的过程是通过手动分配和初始化一个新的 `proc` 结构体，并设置必要的内核和用户态状态完成的。这种手动过程不依赖于 `fork`，因为在系统启动时，还没有其他可供复制的进程。
+
+#### 运行第一个进程的过程
+
+1. **`main`函数调用`userinit`：**
+   - `main`函数在初始化设备和子系统后调用`userinit`来创建第一个用户进程。
+   - `userinit`完成进程的创建，并将该进程的状态设置为`RUNNABLE`。
+2. **调度器`mpmain`启动：**
+   - `main`函数调用`mpmain`，`mpmain`最终调用`scheduler`启动调度器。
+   - 调度器负责寻找一个状态为`RUNNABLE`的进程（此时是`initproc`），并准备运行它。
+3. **设置进程上下文：**
+   - 调度器在找到`initproc`后，将每个CPU的当前进程指针`proc`指向`initproc`。
+   - 调用`switchuvm`函数：切换到`initproc`的页表，使硬件开始使用该进程的内存空间，同时设置任务状态段（Task State Segment, TSS），以便硬件在处理系统调用和中断时使用该进程的内核栈。
+4. **切换上下文到`initproc`：**
+   - 调度器将`initproc`的状态设置为`RUNNING`，然后调用`swtch`函数进行上下文切换。
+   - `swtch`保存当前的寄存器状态，并将目标进程`initproc`的寄存器（包括栈指针和指令指针）加载到CPU寄存器中。
+   - 最后通过`ret`指令，将程序控制权交给`initproc`的内核栈，并开始运行`initproc`。
+5. **执行`forkret`函数：**
+   - 由于`allocproc`在创建`initproc`时将其程序计数器设置为`forkret`函数，CPU首先执行`forkret`。
+   - `forkret`函数执行一些初始化操作，然后返回，进入`trapret`函数。
+6. **进入用户模式：**
+   - `trapret`从进程的`trapframe`中恢复寄存器状态，并最终通过`iret`指令切换到用户模式。
+   - 处理器此时从`initproc`的`trapframe`中的`%eip`继续执行，这个`%eip`值指向`initcode.S`中的第一个指令（地址为0的指令）。
+7. **运行`initcode.S`：**
+   - 进程开始执行`initcode.S`中的指令，这是第一个用户代码，此时的虚拟地址0被映射到实际的物理内存中。
+   - 分页硬件将虚拟地址翻译为物理地址，`initproc`的用户代码在虚拟地址空间中运行。
+
+#### 内核启动并初始化时是否创建进程？
+
+在内核启动并初始化时，内核并没有创建任何进程。此时，内核只是设置了运行环境和硬件配置，准备好资源以便创建用户进程。创建第一个进程的操作是在内核完成初始化后，通过调用`userinit`来实现的。
+
+#### 第一个进程的重要性
+
+第一个进程通常称为`init`进程，它非常重要，因为它通常是所有其他用户进程的祖先。`init`进程负责启动系统中的各种守护进程、服务，并管理整个系统的生命周期。在操作系统启动过程中，它是第一个由内核启动并进入用户模式运行的进程。
+
+#### 总结
+
+通过上述步骤，第一个进程`initproc`被成功创建并运行，操作系统从内核模式转入用户模式，开始执行用户代码。这标志着操作系统进入了正常运行状态，能够处理用户进程和系统服务。
+
+
+
+#### 源码阅读
+
+##### `main.c`
+
+```c
+#include "types.h"        // 包含通用数据类型的定义
+#include "param.h"        // 包含内核参数的定义（如最大进程数等）
+#include "memlayout.h"    // 包含内存布局的定义（如内核虚拟地址空间的布局）
+#include "riscv.h"        // 包含与 RISC-V 处理器架构相关的定义
+#include "defs.h"         // 包含内核函数的声明
+
+// 用于同步多个 CPU 的启动，确保只有一个 CPU 进行初始化
+volatile static int started = 0;
+
+// main() 函数是内核的入口点，所有的 CPU 都会在超级模式下跳转到这里执行
+void main() {
+  // 如果当前 CPU 是 0 号 CPU（主 CPU）
+  if(cpuid() == 0){
+    consoleinit();      // 初始化控制台，用于输入输出
+    printfinit();       // 初始化 printf 所需的资源
+    printf("\n");
+    printf("xv6 kernel is booting\n");
+    printf("\n");
+    kinit();            // 初始化物理页面分配器
+    kvminit();          // 创建内核页表
+    kvminithart();      // 开启分页机制
+    procinit();         // 初始化进程表
+    trapinit();         // 初始化中断向量表
+    trapinithart();     // 安装内核中断向量
+    plicinit();         // 初始化中断控制器
+    plicinithart();     // 配置 PLIC 以接受设备中断
+    binit();            // 初始化缓冲区缓存
+    iinit();            // 初始化 inode 表
+    fileinit();         // 初始化文件表
+    virtio_disk_init(); // 初始化虚拟磁盘（模拟硬盘）
+    userinit();         // 创建第一个用户进程
+    __sync_synchronize(); // 确保所有写操作在继续前都已完成（内存屏障）
+    started = 1;        // 设置标志，表示主 CPU 已经完成初始化
+  } else {
+    // 其他 CPU 等待主 CPU 完成初始化
+    while(started == 0)
+      ;
+    __sync_synchronize(); // 确保读取到最新的 `started` 状态（内存屏障）
+    printf("hart %d starting\n", cpuid());  // 输出当前 CPU 的启动信息
+    kvminithart();    // 开启分页机制
+    trapinithart();   // 安装内核中断向量
+    plicinithart();   // 配置 PLIC 以接受设备中断
+  }
+
+  scheduler();        // 启动调度器，开始调度进程
+}
+```
+
+###### 代码说明：
+
+1. **主 CPU 的初始化（cpuid == 0 的情况）**：
+   - 主 CPU 首先执行一系列内核初始化工作，包括初始化控制台、物理内存分配器、页表、中断控制器等。并且创建第一个用户进程。
+   - 初始化完成后，设置 `started = 1`，通知其他 CPU 可以继续执行。
+2. **其他 CPU 的初始化**：
+   - 其他 CPU 在 `while(started == 0)` 处等待主 CPU 完成初始化。
+   - 主 CPU 完成初始化后，其他 CPU 进行自己的初始化工作，主要是开启分页机制并设置中断向量表。
+3. **启动调度器**：
+   - 所有 CPU 都初始化完成后，进入调度器，开始调度进程。
+
+###### 关键点：
+
+- **内存屏障 (`__sync_synchronize()`)**: 用于确保在多核 CPU 中，读写操作按照预期顺序进行，避免竞态条件。
+- **分页机制**: `kvminit` 和 `kvminithart` 用于创建和启用分页机制，确保内核能够使用虚拟地址访问内存。
+- **调度器**: `scheduler()` 是内核的调度器，它负责管理进程的调度。
+
+这段代码展示了 `xv6` 内核的启动过程，首先是通过主 CPU 完成全局的初始化工作，然后各个 CPU 完成各自的初始化，最终进入调度器开始运行。
+
+##### `proc.c`
+
+```c
+#include "types.h"        // 包含通用类型定义，如整数类型
+#include "param.h"        // 包含与系统参数相关的定义，如最大进程数
+#include "memlayout.h"    // 包含内存布局相关的定义，如地址空间布局
+#include "riscv.h"        // 包含与 RISC-V 架构相关的定义，如寄存器
+#include "spinlock.h"     // 包含自旋锁的定义，用于实现多核同步
+#include "proc.h"         // 包含进程相关的结构体和函数声明
+#include "defs.h"         // 包含内核中常用的函数声明
+
+struct cpu cpus[NCPU];    // 定义 CPU 结构体数组，表示系统中的所有 CPU
+
+struct proc proc[NPROC];  // 定义进程结构体数组，表示系统中的所有进程
+
+struct proc *initproc;    // 指向初始进程的指针，initproc 是第一个用户进程
+
+int nextpid = 1;          // 用于生成进程 ID 的全局变量
+struct spinlock pid_lock; // 用于保护 nextpid 的自旋锁
+
+extern void forkret(void);    // forkret 是一个外部函数声明，用于进程切换
+static void freeproc(struct proc *p); // freeproc 函数的静态声明，用于释放进程资源
+
+extern char trampoline[]; // trampoline 是一个外部声明，指向 trampoline.S 文件中的代码
+
+// wait_lock 是用于保护进程等待的自旋锁
+// 确保 wait() 操作中的唤醒不会丢失
+struct spinlock wait_lock;
+
+// 为每个进程的内核栈分配一页内存，并将其映射到高地址，后面跟一个无效的保护页
+void proc_mapstacks(pagetable_t kpgtbl) {
+  struct proc *p;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    char *pa = kalloc();  // 为进程分配一页物理内存
+    if(pa == 0)
+      panic("kalloc");   // 如果分配失败，打印错误信息并停止
+    uint64 va = KSTACK((int) (p - proc)); // 计算内核栈的虚拟地址
+    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W); // 将物理地址映射到虚拟地址
+  }
+}
+
+// 初始化进程表
+void procinit(void) {
+  struct proc *p;
+  
+  initlock(&pid_lock, "nextpid");  // 初始化生成进程 ID 的锁
+  initlock(&wait_lock, "wait_lock"); // 初始化进程等待的锁
+  for(p = proc; p < &proc[NPROC]; p++) {
+    initlock(&p->lock, "proc");  // 初始化每个进程的锁
+    p->state = UNUSED;  // 将进程状态初始化为 UNUSED（未使用）
+    p->kstack = KSTACK((int) (p - proc)); // 设置进程的内核栈指针
+  }
+}
+
+// 返回当前 CPU 的 ID，必须在关闭中断的情况下调用，以防止竞态条件
+int cpuid() {
+  int id = r_tp();  // 获取当前 CPU 的 ID
+  return id;
+}
+
+// 返回当前 CPU 的结构体指针，必须在关闭中断的情况下调用
+struct cpu* mycpu(void) {
+  int id = cpuid(); // 获取当前 CPU 的 ID
+  struct cpu *c = &cpus[id]; // 返回对应的 CPU 结构体
+  return c;
+}
+
+// 返回当前进程的结构体指针，如果没有进程运行则返回 0
+struct proc* myproc(void) {
+  push_off();  // 关闭中断，防止竞态条件
+  struct cpu *c = mycpu(); // 获取当前 CPU 的结构体
+  struct proc *p = c->proc; // 获取当前 CPU 正在运行的进程
+  pop_off();  // 恢复中断
+  return p;
+}
+
+// 分配一个新的进程 ID
+int allocpid() {
+  int pid;
+  
+  acquire(&pid_lock); // 加锁，保护对 nextpid 的访问
+  pid = nextpid;      // 获取当前的进程 ID
+  nextpid = nextpid + 1; // 生成下一个进程 ID
+  release(&pid_lock); // 解锁
+
+  return pid;
+}
+
+// 在进程表中寻找一个未使用的进程槽位，如果找到则初始化该槽位并返回
+// 如果没有找到可用的槽位，或者内存分配失败，则返回 0
+static struct proc* allocproc(void) {
+  struct proc *p;
+
+  // 遍历进程表，寻找一个未使用的进程槽位
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock); // 加锁，保护对进程状态的访问
+    if(p->state == UNUSED) {
+      goto found;  // 找到未使用的槽位，跳转到 found 标签
+    } else {
+      release(&p->lock); // 如果该进程已被使用，则解锁并继续查找
+    }
+  }
+  return 0;  // 如果没有找到可用的槽位，则返回 0
+
+found:
+  p->pid = allocpid();  // 分配一个新的进程 ID
+  p->state = USED;      // 将进程状态设置为 USED（已使用）
+
+  // 为进程分配一个 trapframe 页，用于保存用户寄存器状态
+  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);  // 如果分配失败，释放进程并返回 0
+    release(&p->lock);
+    return 0;
+  }
+
+  // 为进程分配一个空的用户页表
+  p->pagetable = proc_pagetable(p);
+  if(p->pagetable == 0){
+    freeproc(p);  // 如果分配失败，释放进程并返回 0
+    release(&p->lock);
+    return 0;
+  }
+
+  // 设置新进程的上下文，使其从 forkret 开始执行
+  memset(&p->context, 0, sizeof(p->context));  // 清空上下文结构体
+  p->context.ra = (uint64)forkret;  // 设置返回地址为 forkret
+  p->context.sp = p->kstack + PGSIZE;  // 设置栈指针为内核栈的顶部
+
+  return p;  // 返回初始化好的进程
+}
+
+// 释放进程结构体及其相关数据，包括用户页表
+// 必须持有进程的锁才能调用
+static void freeproc(struct proc *p) {
+  if(p->trapframe)
+    kfree((void*)p->trapframe);  // 释放 trapframe 页
+  p->trapframe = 0;
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);  // 释放进程的页表
+  p->pagetable = 0;
+  p->sz = 0;
+  p->pid = 0;
+  p->parent = 0;
+  p->name[0] = 0;
+  p->chan = 0;
+  p->killed = 0;
+  p->xstate = 0;
+  p->state = UNUSED;  // 将进程状态重置为 UNUSED
+}
+
+// 为给定的进程创建一个用户页表，初始时没有用户内存，但包含 trampoline 和 trapframe 页
+pagetable_t proc_pagetable(struct proc *p) {
+  pagetable_t pagetable;
+
+  // 创建一个空的页表
+  pagetable = uvmcreate();
+  if(pagetable == 0)
+    return 0;
+
+  // 将 trampoline 代码映射到最高的用户虚拟地址
+  if(mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) < 0){
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+
+  // 将 trapframe 页映射到 trampoline 页下方
+  if(mappages(pagetable, TRAPFRAME, PGSIZE, (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+
+  return pagetable;  // 返回创建好的页表
+}
+
+// 释放进程的页表，并释放其引用的物理内存
+void proc_freepagetable(pagetable_t pagetable, uint64 sz) {
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0);  // 取消映射 trampoline 页
+  uvmunmap(pagetable, TRAPFRAME, 1, 0);  // 取消映射 trapframe 页
+  uvmfree(pagetable, sz);  // 释放页表及其引用的物理内存
+}
+
+// 初始化第一个用户进程
+void userinit(void) {
+  struct proc *p;
+
+  p = allocproc();  // 分配并初始化一个进程
+  initproc = p;  // 设置 initproc 指针指向该进程
+  
+  // 分配一页用户内存，并将 initcode 的指令和数据复制到该页中
+  uvmfirst(p->pagetable, initcode, sizeof(initcode));
+  p->sz = PGSIZE;
+
+  // 准备从内核返回到用户空间
+  p->trapframe->epc = 0;  // 设置用户程序计数器为 0
+  p->trapframe->sp = PGSIZE;  // 设置用户栈指针为用户页的顶部
+
+  safestrcpy(p->name, "initcode", sizeof(p->name));  // 设置进程名称为 "initcode"
+  p->cwd = namei("/");  // 设置进程的当前工作目录为根目录
+
+  p->state = RUNNABLE;  // 将进程状态设置为 RUNNABLE，使其可被调度
+
+  release(&p->lock);  // 释放进程锁
+}
+
+// 通过增加或减少 n 字节来增长或收缩用户内存
+// 成功时返回 0，失败时返回 -1
+int growproc(int n) {
+  uint64 sz;
+  struct proc *p = myproc();
+
+  sz = p->sz;  // 获取当前进程的内存大小
+  if(n > 0){
+    // 增加内存
+    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+      return -1;  // 如果分配失败，返回 -1
+    }
+  } else if(n < 0){
+    // 减少内存
+    sz = uvmdealloc(p->pagetable, sz, sz + n);
+  }
+  p->sz = sz;  // 更新进程的内存大小
+  return 0;  // 返回 0 表示成功
+}
+
+// 创建一个新进程，复制父进程的内存
+// 设置子进程的内核栈以便从 fork() 系统调用返回
+int fork(void) {
+  int i, pid;
+  struct proc *np;
+  struct proc *p = myproc();
+
+  // 分配进程
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // 复制父进程的用户内存到子进程
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    freeproc(np);  // 如果复制失败，释放子进程
+    release(&np->lock);
+    return -1;
+  }
+  np->sz = p->sz;
+
+  // 复制保存的用户寄存器
+  *(np->trapframe) = *(p->trapframe);
+
+  // 使 fork 在子进程中返回 0
+  np->trapframe->a0 = 0;
+
+  // 增加打开文件描述符的引用计数
+  for(i = 0; i < NOFILE; i++)
+    if(p->ofile[i])
+      np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+
+  safestrcpy(np->name, p->name, sizeof(p->name));  // 复制进程名称
+
+  pid = np->pid;
+
+  release(&np->lock);
+
+  acquire(&wait_lock);
+  np->parent = p;  // 设置子进程的父进程为当前进程
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = RUNNABLE;  // 将子进程状态设置为 RUNNABLE，使其可被调度
+  release(&np->lock);
+
+  return pid;  // 返回子进程的 PID
+}
+
+// 将进程 p 的孤儿进程交给 init 进程
+// 调用者必须持有 wait_lock
+void reparent(struct proc *p) {
+  struct proc *pp;
+
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->parent == p){
+      pp->parent = initproc;  // 将子进程的父进程设置为 initproc
+      wakeup(initproc);  // 唤醒 initproc，以便其处理孤儿进程
+    }
+  }
+}
+
+// 退出当前进程，不会返回
+// 退出的进程将保持在僵尸状态，直到其父进程调用 wait()
+void exit(int status) {
+  struct proc *p = myproc();
+
+  if(p == initproc)
+    panic("init exiting");
+
+  // 关闭所有打开的文件
+  for(int fd = 0; fd < NOFILE; fd++){
+    if(p->ofile[fd]){
+      struct file *f = p->ofile[fd];
+      fileclose(f);
+      p->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  iput(p->cwd);  // 释放当前工作目录
+  end_op();
+  p->cwd = 0;
+
+  acquire(&wait_lock);
+
+  // 将子进程交给 init 进程
+  reparent(p);
+
+  // 可能父进程正在 wait() 中睡眠，唤醒父进程
+  wakeup(p->parent);
+  
+  acquire(&p->lock);
+
+  p->xstate = status;  // 保存退出状态
+  p->state = ZOMBIE;   // 将进程状态设置为僵尸状态
+
+  release(&wait_lock);
+
+  // 进入调度器，不会返回
+  sched();
+  panic("zombie exit");
+}
+
+// 等待子进程退出并返回其 PID
+// 如果当前进程没有子进程，返回 -1
+int wait(uint64 addr) {
+  struct proc *pp;
+  int havekids, pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  for(;;){
+    // 遍历进程表，寻找退出的子进程
+    havekids = 0;
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+      if(pp->parent == p){
+        // 确保子进程不在 exit() 或 swtch() 中
+        acquire(&pp->lock);
+
+        havekids = 1;
+        if(pp->state == ZOMBIE){
+          // 找到一个僵尸进程
+          pid = pp->pid;
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate, sizeof(pp->xstate)) < 0) {
+            release(&pp->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(pp);  // 释放子进程资源
+          release(&pp->lock);
+          release(&wait_lock);
+          return pid;  // 返回子进程的 PID
+        }
+        release(&pp->lock);
+      }
+    }
+
+    // 如果没有子进程或当前进程被杀死，则返回
+    if(!havekids || killed(p)){
+      release(&wait_lock);
+      return -1;
+    }
+    
+    // 等待子进程退出
+    sleep(p, &wait_lock);
+  }
+}
+
+// 每个 CPU 的进程调度器
+// 每个 CPU 在设置好自己后都会调用 scheduler()
+// 调度器不会返回。它循环执行以下步骤：
+//  - 选择一个进程运行
+//  - 切换上下文以开始运行该进程
+//  - 最终该进程会通过 swtch() 将控制权交还给调度器
+void scheduler(void) {
+  struct proc *p;
+  struct cpu *c = mycpu();
+
+  c->proc = 0;
+  for(;;){
+    // 最近运行的进程可能关闭了中断；启用中断以避免死锁
+    intr_on();
+
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // 切换到选择的进程。进程应该释放其锁并在跳回调度器前重新获取锁。
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+
+        // 当前进程暂时运行结束
+        // 在跳回调度器前，进程应该已将其状态改变
+        c->proc = 0;
+      }
+      release(&p->lock);
+    }
+  }
+}
+
+// 切换到调度器。必须仅持有 p->lock 并已改变 proc->state。
+// 保存和恢复 intena，因为 intena 是内核线程的属性，而不是 CPU 的属性。
+void sched(void) {
+  int intena;
+  struct proc *p = myproc();
+
+  if(!holding(&p->lock))
+    panic("sched p->lock");
+  if(mycpu()->noff != 1)
+    panic("sched locks");
+  if(p->state == RUNNING)
+    panic("sched running");
+  if(intr_get())
+    panic("sched interruptible");
+
+  intena = mycpu()->intena;
+  swtch(&p->context, &mycpu()->context);
+  mycpu()->intena = intena;
+}
+
+// 放弃 CPU 以进行一次调度
+void yield(void) {
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->state = RUNNABLE;
+  sched();
+  release(&p->lock);
+}
+
+// fork 子进程的第一次调度由调度器进行，并将其切换到 forkret
+void forkret(void) {
+  static int first = 1;
+
+  // 仍持有 p->lock 来自调度器
+  release(&myproc()->lock);
+
+  if (first) {
+    // 文件系统初始化必须在一个普通进程的上下文中运行
+    // 因为它可能调用 sleep，不能在 main() 中运行
+    fsinit(ROOTDEV);
+
+    first = 0;
+    // 确保其他核心看到 first = 0
+    __sync_synchronize();
+  }
+
+  usertrapret();  // 返回用户模式
+}
+
+// 原子地释放锁并进入休眠状态，等待唤醒。唤醒后重新获取锁。
+void sleep(void *chan, struct spinlock *lk) {
+  struct proc *p = myproc();
+  
+  // 必须获取 p->lock 以更改 p->state 并调用 sched
+  // 一旦我们持有 p->lock，我们可以保证不会错过任何唤醒（wakeup 锁定 p->lock）
+  // 所以可以安全地释放 lk
+
+  acquire(&p->lock);  
+  release(lk);
+
+  // 进入休眠状态
+  p->chan = chan;
+  p->state = SLEEPING;
+
+  sched();
+
+  // 清理工作
+  p->chan = 0;
+
+  // 重新获取原始锁
+  release(&p->lock);
+  acquire(lk);
+}
+
+// 唤醒所有在 chan 上休眠的进程。必须在没有持有任何 p->lock 的情况下调用
+void wakeup(void *chan) {
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p != myproc()){
+      acquire(&p->lock);
+      if(p->state == SLEEPING && p->chan == chan) {
+        p->state = RUNNABLE;
+      }
+      release(&p->lock);
+    }
+  }
+}
+
+// 杀死具有给定 pid 的进程
+// 受害者在尝试返回用户空间前不会退出
+int kill(int pid) {
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      p->killed = 1;
+      if(p->state == SLEEPING){
+        // 将进程从休眠中唤醒
+        p->state = RUNNABLE;
+      }
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+// 设置进程 p 的 killed 状态
+void setkilled(struct proc *p) {
+  acquire(&p->lock);
+  p->killed = 1;
+  release(&p->lock);
+}
+
+// 检查进程 p 是否已被设置为 killed 状态
+int killed(struct proc *p) {
+  int k;
+  
+  acquire(&p->lock);
+  k = p->killed;
+  release(&p->lock);
+  return k;
+}
+
+// 将数据从内核地址或用户地址复制到另一个地址
+// 成功时返回 0，失败时返回 -1
+int either_copyout(int user_dst, uint64 dst, void *src, uint64 len) {
+  struct proc *p = myproc();
+  if(user_dst){
+    return copyout(p->pagetable, dst, src, len);
+  } else {
+    memmove((char *)dst, src, len);
+    return 0;
+  }
+}
+
+// 将数据从内核地址或用户地址复制到另一个地址
+// 成功时返回 0，失败时返回 -1
+int either_copyin(void *dst, int user_src, uint64 src, uint64 len) {
+  struct proc *p = myproc();
+  if(user_src){
+    return copyin(p->pagetable, dst, src, len);
+  } else {
+    memmove(dst, (char*)src, len);
+    return 0;
+  }
+}
+
+// 向控制台打印进程列表，用于调试。
+// 当用户在控制台上输入 ^P 时运行。
+// 不使用锁，以避免进一步阻塞已卡住的机器。
+void procdump(void) {
+  static char *states[] = {
+    [UNUSED]    "unused",
+    [USED]      "used",
+    [SLEEPING]  "sleep ",
+    [RUNNABLE]  "runble",
+    [RUNNING]   "run   ",
+    [ZOMBIE]    "zombie"
+  };
+  struct proc *p;
+  char *state;
+
+  printf("\n");
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state == UNUSED)
+      continue;
+    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      state = states[p->state];
+    else
+      state = "???";
+    printf("%d %s %s", p->pid, state, p->name);
+    printf("\n");
+  }
+}
+```
+
+##### `vm.c`
+
+```c
+#include "param.h"
+#include "types.h"
+#include "memlayout.h"
+#include "elf.h"
+#include "riscv.h"
+#include "defs.h"
+#include "fs.h"
+
+/*
+ * 内核的页表（kernel's page table）。
+ */
+pagetable_t kernel_pagetable;
+
+extern char etext[];  // kernel.ld 文件中定义，表示内核代码的结束位置。
+
+extern char trampoline[]; // trampoline.S 文件中定义，trampoline 用于内核与用户空间的切换。
+
+// 创建一个内核的直接映射页表。
+pagetable_t
+kvmmake(void)
+{
+  pagetable_t kpgtbl;
+
+  // 分配一页物理内存用于内核页表，并将其清零。
+  kpgtbl = (pagetable_t) kalloc();
+  memset(kpgtbl, 0, PGSIZE);
+
+  // 将 UART 寄存器映射到相同的虚拟地址和物理地址上，允许读写。
+  kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // 将 virtio mmio 磁盘接口映射到相同的虚拟地址和物理地址上，允许读写。
+  kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // 将 PLIC 映射到相同的虚拟地址和物理地址上，允许读写。
+  kvmmap(kpgtbl, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // 映射内核的代码段，允许读取和执行（不可写）。
+  kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // 映射内核的数据段和物理内存（从内核代码结束的位置开始），允许读写。
+  kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // 将 trampoline 映射到内核的最高虚拟地址，用于 trap 入口和出口。
+  kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  // 为每个进程分配并映射一个内核栈。
+  proc_mapstacks(kpgtbl);
+  
+  return kpgtbl;
+}
+
+// 初始化内核的唯一页表。
+void
+kvminit(void)
+{
+  kernel_pagetable = kvmmake();
+}
+
+// 切换硬件页表寄存器到内核的页表，并启用分页。
+void
+kvminithart()
+{
+  // 等待任何前一个对页表内存的写操作完成。
+  sfence_vma();
+
+  // 设置页表寄存器指向内核的页表。
+  w_satp(MAKE_SATP(kernel_pagetable));
+
+  // 刷新 TLB 中的陈旧条目。
+  sfence_vma();
+}
+
+// 返回页表 pagetable 中对应虚拟地址 va 的 PTE 的地址。
+// 如果 alloc!=0，则创建所需的页表页。
+// 在 RISC-V 的 Sv39 方案中，页表有三层，每页表页包含 512 个 64 位 PTE。
+// 64 位虚拟地址被分成五个字段：
+//   39..63 -- 必须为零。
+//   30..38 -- 9 位的 level-2 索引。
+//   21..29 -- 9 位的 level-1 索引。
+//   12..20 -- 9 位的 level-0 索引。
+//    0..11 -- 页内的 12 位字节偏移量。
+pte_t *
+walk(pagetable_t pagetable, uint64 va, int alloc)
+{
+  if(va >= MAXVA)
+    panic("walk");
+
+  for(int level = 2; level > 0; level--) {
+    pte_t *pte = &pagetable[PX(level, va)];
+    if(*pte & PTE_V) {
+      pagetable = (pagetable_t)PTE2PA(*pte);
+    } else {
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+        return 0;
+      memset(pagetable, 0, PGSIZE);
+      *pte = PA2PTE(pagetable) | PTE_V;
+    }
+  }
+  return &pagetable[PX(0, va)];
+}
+
+// 查找虚拟地址 va 对应的物理地址，如果没有映射则返回 0。
+// 仅用于查找用户页。
+uint64
+walkaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  return pa;
+}
+
+// 将一个映射添加到内核页表中。
+// 仅在启动时使用，不刷新 TLB 或启用分页。
+void
+kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpgtbl, va, sz, pa, perm) != 0)
+    panic("kvmmap");
+}
+
+// 为从 va 开始的虚拟地址创建 PTE，指向从 pa 开始的物理地址。
+// va 和 size 必须是页对齐的。
+// 成功时返回 0，如果 walk() 无法分配所需的页表页则返回 -1。
+int
+mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("mappages: va not aligned");
+
+  if((size % PGSIZE) != 0)
+    panic("mappages: size not aligned");
+
+  if(size == 0)
+    panic("mappages: size");
+  
+  a = va;
+  last = va + size - PGSIZE;
+  for(;;){
+    if((pte = walk(pagetable, a, 1)) == 0)
+      return -1;
+    if(*pte & PTE_V)
+      panic("mappages: remap");
+    *pte = PA2PTE(pa) | perm | PTE_V;
+    if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
+  }
+  return 0;
+}
+
+// 移除从 va 开始的 npages 个页映射。va 必须是页对齐的。
+// 这些映射必须存在。可以选择性地释放物理内存。
+void
+uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("uvmunmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvmunmap: walk");
+    if((*pte & PTE_V) == 0)
+      panic("uvmunmap: not mapped");
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not a leaf");
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    *pte = 0;
+  }
+}
+
+// 创建一个空的用户页表。
+// 如果内存不足则返回 0。
+pagetable_t
+uvmcreate()
+{
+  pagetable_t pagetable;
+  pagetable = (pagetable_t) kalloc();
+  if(pagetable == 0)
+    return 0;
+  memset(pagetable, 0, PGSIZE);
+  return pagetable;
+}
+
+// 将用户 initcode 加载到 pagetable 的地址 0 处，
+// 用于第一个进程。
+// sz 必须小于一页。
+void
+uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
+{
+  char *mem;
+
+  if(sz >= PGSIZE)
+    panic("uvmfirst: more than a page");
+  mem = kalloc();
+  memset(mem, 0, PGSIZE);
+  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+  memmove(mem, src, sz);
+}
+
+// 为进程分配 PTE 和物理内存以从 oldsz 增长到 newsz，
+// 这两个大小不必是页对齐的。成功返回新的大小，出错返回 0。
+uint64
+uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
+{
+  char *mem;
+  uint64 a;
+
+  if(newsz < oldsz)
+    return oldsz;
+
+  oldsz = PGROUNDUP(oldsz);
+  for(a = oldsz; a < newsz; a += PGSIZE){
+    mem = kalloc();
+    if(mem == 0){
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      kfree(mem);
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+  }
+  return newsz;
+}
+
+// 释放用户页内存，以将进程大小从 oldsz 减小到 newsz。
+// oldsz 和 newsz 不必是页对齐的，newsz 也不必小于 oldsz。
+// oldsz 可以大于实际的进程大小。返回新的进程大小。
+uint64
+uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  if(newsz >= oldsz)
+    return oldsz;
+
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
+  }
+
+  return newsz;
+}
+
+// 递归释放页表页。
+// 所有叶子节点的映射必须已经移除。
+void
+freewalk(pagetable_t pagetable)
+{
+  // 每个页表中有 2^9 = 512 个 PTE。
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // 该 PTE 指向一个下级页表。
+      uint64 child = PTE2PA(pte);
+      freewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    } else if(pte & PTE_V){
+      panic("freewalk: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+// 释放用户内存页，然后释放页表页。
+void
+uvmfree(pagetable_t pagetable, uint64 sz)
+{
+  if(sz > 0)
+    uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);
+  freewalk(pagetable);
+}
+
+// 给定父进程的页表，将其内存复制到子进程的页表中。
+// 复制页表和物理内存。
+// 成功时返回 0，失败时返回 -1，并释放任何已分配的页。
+int
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    if((mem = kalloc()) == 0)
+      goto err;
+    memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      goto err;
+    }
+  }
+  return 0;
+
+ err:
+  uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
+// 将一个 PTE 标记为对用户访问无效。
+// exec 系统调用使用它来为用户栈保护页提供保护。
+void
+uvmclear(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    panic("uvmclear");
+  *pte &= ~PTE_U;
+}
+
+// 从内核复制到用户。
+// 从 src 复制 len 个字节到给定页表中的虚拟地址 dstva。
+// 成功时返回 0，失败时返回 -1。
+int
+copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+{
+  uint64 n, va0, pa0;
+  pte_t *pte;
+
+  while(len > 0){
+    va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)
+      return -1;
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
+       (*pte & PTE_W) == 0)
+      return -1;
+    pa0 = PTE2PA(*pte);
+    n = PGSIZE - (dstva - va0);
+    if(n > len)
+      n = len;
+    memmove((void *)(pa0 + (dstva - va0)), src, n);
+
+    len -= n;
+    src += n;
+    dstva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+// 从用户复制到内核。
+// 从 srcva 处给定页表中的虚拟地址复制 len 个字节到 dst。
+// 成功时返回 0，失败时返回 -1。
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+  uint64 n, va0, pa0;
+
+  while(len > 0){
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0)
+      return -1;
+    n = PGSIZE - (srcva - va0);
+    if(n > len)
+      n = len;
+    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+
+    len -= n;
+    dst += n;
+    srcva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+// 从用户复制一个以 null 结尾的字符串到内核。
+// 从 srcva 处给定页表中的虚拟地址复制字节到 dst，直到遇到 '\0' 或到达 max。
+// 成功时返回 0，失败时返回 -1。
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  uint64 n, va0, pa0;
+  int got_null = 0;
+
+  while(got_null == 0 && max > 0){
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0)
+      return -1;
+    n = PGSIZE - (srcva - va0);
+    if(n > max)
+      n = max;
+
+    char *p = (char *) (pa0 + (srcva - va0));
+    while(n > 0){
+      if(*p == '\0'){
+        *dst = '\0';
+        got_null = 1;
+        break;
+      } else {
+        *dst = *p;
+      }
+      --n;
+      --max;
+      p++;
+      dst++;
+    }
+
+    srcva = va0 + PGSIZE;
+  }
+  if(got_null){
+    return 0;
+  } else {
+    return -1;
+  }
+}
+```
+
+##### `trap.c`
+
+```c
+#include "types.h"
+#include "param.h"
+#include "memlayout.h"
+#include "riscv.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "defs.h"
+
+// 定义一个自旋锁，用于保护 ticks 变量。
+struct spinlock tickslock;
+// 定义一个全局变量，用于跟踪系统的时钟滴答数。
+uint ticks;
+
+extern char trampoline[], uservec[], userret[];
+
+// 在 kernelvec.S 中定义的函数，用于处理内核态的 trap。
+void kernelvec();
+
+extern int devintr(); // 声明设备中断处理函数。
+
+// 初始化 trap 模块，主要是初始化 tickslock 锁。
+void
+trapinit(void)
+{
+  initlock(&tickslock, "time");
+}
+
+// 为当前 CPU 设置中断向量表，
+// 使其能够处理内核态的异常和中断。
+void
+trapinithart(void)
+{
+  w_stvec((uint64)kernelvec);
+}
+
+// 处理来自用户态的中断、异常或系统调用。
+// 这个函数由 trampoline.S 调用。
+void
+usertrap(void)
+{
+  int which_dev = 0;
+
+  // 检查当前中断是否来自用户态，如果不是，则触发 panic。
+  if((r_sstatus() & SSTATUS_SPP) != 0)
+    panic("usertrap: not from user mode");
+
+  // 将中断向量表设置为 kernelvec，这样可以在处理完中断后进入内核。
+  w_stvec((uint64)kernelvec);
+
+  struct proc *p = myproc();
+  
+  // 保存用户程序计数器，以便返回用户态时可以继续执行。
+  p->trapframe->epc = r_sepc();
+  
+  // 如果 scause 的值为 8，表示这是一个系统调用。
+  if(r_scause() == 8){
+    // 系统调用
+
+    // 如果进程被标记为要杀死，则退出。
+    if(killed(p))
+      exit(-1);
+
+    // 增加程序计数器，使其跳过 ecall 指令。
+    p->trapframe->epc += 4;
+
+    // 开启中断，以便在处理系统调用时可以响应其他中断。
+    intr_on();
+
+    // 处理系统调用。
+    syscall();
+  } else if((which_dev = devintr()) != 0){
+    // 如果是设备中断，则已处理。
+  } else {
+    // 如果是其他异常，则打印错误信息并标记进程为被杀死。
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    setkilled(p);
+  }
+
+  // 如果进程被标记为要杀死，则退出。
+  if(killed(p))
+    exit(-1);
+
+  // 如果这是一个时钟中断，则让出 CPU。
+  if(which_dev == 2)
+    yield();
+
+  // 返回用户态。
+  usertrapret();
+}
+
+// 返回用户态的过程。
+void
+usertrapret(void)
+{
+  struct proc *p = myproc();
+
+  // 由于即将从 kerneltrap() 转到 usertrap()，
+// 关闭中断，直到完全切换到用户态。
+  intr_off();
+
+  // 将中断向量表设置为 trampoline.S 中的 uservec，
+  // 这样可以处理用户态的中断和异常。
+  uint64 trampoline_uservec = TRAMPOLINE + (uservec - trampoline);
+  w_stvec(trampoline_uservec);
+
+  // 设置 trapframe 中的值，这些值将在进程下次进入内核时使用。
+  p->trapframe->kernel_satp = r_satp();         // 内核页表
+  p->trapframe->kernel_sp = p->kstack + PGSIZE; // 进程的内核栈指针
+  p->trapframe->kernel_trap = (uint64)usertrap; // trap 处理函数地址
+  p->trapframe->kernel_hartid = r_tp();         // CPU 的 hartid
+
+  // 设置 sret 指令将使用的寄存器，以返回用户态。
+  
+  // 设置 S 特权模式为用户态。
+  unsigned long x = r_sstatus();
+  x &= ~SSTATUS_SPP; // 清除 SPP 位，表示接下来进入用户模式
+  x |= SSTATUS_SPIE; // 使能用户模式下的中断
+  w_sstatus(x);
+
+  // 设置 S 异常程序计数器为保存的用户程序计数器。
+  w_sepc(p->trapframe->epc);
+
+  // 告诉 trampoline.S 使用的用户页表。
+  uint64 satp = MAKE_SATP(p->pagetable);
+
+  // 跳转到 trampoline.S 中的 userret 函数，
+  // 该函数会切换到用户页表，恢复用户寄存器，并使用 sret 返回用户态。
+  uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
+  ((void (*)(uint64))trampoline_userret)(satp);
+}
+
+// 内核代码中的中断和异常通过 kernelvec 进入这个函数，
+// 使用当前内核栈处理。
+void 
+kerneltrap()
+{
+  int which_dev = 0;
+  uint64 sepc = r_sepc(); // 保存当前的程序计数器
+  uint64 sstatus = r_sstatus(); // 保存当前的状态寄存器
+  uint64 scause = r_scause(); // 保存当前的异常原因寄存器
+  
+  // 如果中断不是从 S 模式进入的，触发 panic。
+  if((sstatus & SSTATUS_SPP) == 0)
+    panic("kerneltrap: not from supervisor mode");
+  // 如果中断已经开启，触发 panic。
+  if(intr_get() != 0)
+    panic("kerneltrap: interrupts enabled");
+
+  // 处理设备中断，如果不是设备中断则触发 panic。
+  if((which_dev = devintr()) == 0){
+    printf("scause %p\n", scause);
+    printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+    panic("kerneltrap");
+  }
+
+  // 如果是时钟中断，并且当前进程正在运行，则让出 CPU。
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+    yield();
+
+  // yield() 可能会导致其他中断发生，
+  // 所以需要恢复 trap 寄存器的值，以便 kernelvec.S 中的 sepc 指令使用。
+  w_sepc(sepc);
+  w_sstatus(sstatus);
+}
+
+// 处理时钟中断。
+void
+clockintr()
+{
+  // 获取 ticks 锁，增加 ticks 计数，并唤醒所有等待 ticks 的进程。
+  acquire(&tickslock);
+  ticks++;
+  wakeup(&ticks);
+  release(&tickslock);
+}
+
+// 检查是否是外部中断或软件中断，并进行处理。
+// 如果是时钟中断，返回 2；
+// 如果是其他设备中断，返回 1；
+// 如果未识别，则返回 0。
+int
+devintr()
+{
+  uint64 scause = r_scause();
+
+  // 检查是否是外部中断，并且中断类型为 9（即 PLIC 中断）。
+  if((scause & 0x8000000000000000L) &&
+     (scause & 0xff) == 9){
+    // 这是一个来自 PLIC 的 S 模式外部中断。
+
+    // irq 表示哪个设备引发了中断。
+    int irq = plic_claim();
+
+    // 根据 irq 的值处理不同的设备中断。
+    if(irq == UART0_IRQ){
+      uartintr(); // 处理 UART 中断
+    } else if(irq == VIRTIO0_IRQ){
+      virtio_disk_intr(); // 处理 virtio 磁盘中断
+    } else if(irq){
+      printf("unexpected interrupt irq=%d\n", irq); // 未知中断
+    }
+
+    // PLIC 允许每个设备同时引发一个中断；
+    // 告诉 PLIC 该设备现在可以再次引发中断。
+    if(irq)
+      plic_complete(irq);
+
+    return 1; // 设备中断
+  } else if(scause == 0x8000000000000001L){
+    // 这是一个来自机器模式的定时器中断，
+    // 由 kernelvec.S 中的 timervec 转发。
+
+    if(cpuid() == 0){
+      clockintr(); // 处理时钟中断
+    }
+    
+    // 通过清除 sip 寄存器中的 SSIP 位来确认软件中断。
+    w_sip(r_sip() & ~2);
+
+    return 2; // 时钟中断
+  } else {
+    return 0; // 未知中断
+  }
+}
+```
+
+##### `initcode.S`
+
+```assembly
+# Initial process that execs /init.
+# This code runs in user space.
+# 这是一个初始化进程，用于执行 /init 程序。
+# 该代码运行在用户空间。
+
+#include "syscall.h" 
+# 包含了系统调用的常量定义，例如 SYS_exec 和 SYS_exit 的值。
+# 在汇编代码中，我们通过符号名（例如 SYS_exec, SYS_exit）使用这些常量。
+
+# Start of the program. This is where the execution begins.
+.globl start
+# 将标签 `start` 声明为全局符号，这意味着它可以被其他文件访问。
+start:
+        la a0, init       # 将存储在 `init` 标签处的地址加载到寄存器 a0 中。
+        la a1, argv       # 将存储在 `argv` 标签处的地址加载到寄存器 a1 中。
+        li a7, SYS_exec   # 将系统调用号 SYS_exec 加载到寄存器 a7 中。
+        ecall             # 执行系统调用，调用内核执行 exec 系统调用，用 init 和 argv 作为参数。
+
+# Infinite loop to keep calling exit if exec fails.
+# 如果 exec 失败，进入无限循环，不断调用 exit 系统调用以退出进程。
+exit:
+        li a7, SYS_exit   # 将系统调用号 SYS_exit 加载到寄存器 a7 中。
+        ecall             # 执行系统调用，调用内核执行 exit 系统调用，终止进程。
+        jal exit          # 跳转并链接到 exit 标签处，从而形成一个无限循环。
+
+# Data section defining the init string and argv array.
+# 定义了 init 字符串和 argv 数组的部分。
+
+# char init[] = "/init\0";
+init:
+  .string "/init\0"       # 定义一个字符串 "/init"，并以空字符 '\0' 结尾。
+
+# char *argv[] = { init, 0 };
+# 定义一个指向字符串的指针数组，argv[0] 指向 init，argv[1] 为空（0）。
+.p2align 2
+# 保证 `argv` 的起始地址是 4 字节对齐的，以符合内存对齐要求。
+argv:
+  .long init              # 定义一个指针，指向 `init` 字符串的地址。
+  .long 0                 # 定义一个空指针（NULL），表示 argv 数组的结束。
+```
+
+###### 代码工作流程：
+
+1. 程序首先加载 `/init` 字符串的地址和 `argv` 数组的地址，并调用 `exec` 系统调用来运行 `/init` 程序。
+2. 如果 `exec` 成功，当前进程的地址空间将被 `/init` 替换，并开始执行 `/init` 程序的代码。
+3. 如果 `exec` 失败，程序将进入一个无限循环，不断调用 `exit` 系统调用来终止进程。
+
+###### 关键点：
+
+- 该代码是一个典型的操作系统启动用户进程的例子，主要任务是调用 `exec` 来启动 `/init` 程序，这是 Unix-like 操作系统中第一个用户态进程。
+- 该代码利用了 RISC-V 架构的寄存器来传递参数和调用系统调用，体现了汇编语言与系统调用的紧密结合。
+
+###### 第一个系统调用：exec
+
+`initcode.S` 干的第一件事是触发 `exec` 系统调用。就像我们在第0章看到的一样，`exec` 用一个新的程序来代替当前进程的内存和寄存器，但是其文件描述符、进程 id 和父进程都是不变的。
+
+`initcode.S`（7708）刚开始会将 `$argv，$init，$0` 三个值推入栈中，接下来把 `%eax` 设置为 `SYS_exec` 然后执行 `int T_SYSCALL`：这样做是告诉内核运行 `exec` 这个系统调用。如果运行正常的话，`exec` 不会返回：它会运行名为 `$init` 的程序，`$init` 是一个以空字符结尾的字符串，即 `/init`（7721-7723）。如果 `exec` 失败并且返回了，`initcode` 会不断调用一个不会返回的系统调用 `exit` 。
+
+系统调用 `exec` 的参数是 `$init、$argv`。最后的`0`让这个手动构建的系统调用看起来就像普通的系统调用一样，我们会在第3章详细讨论这个问题。和之前的代码一样，xv6 努力避免为第一个进程的运行单独写一段代码，而是尽量使用通用于普通操作的代码。
+
+第2章讲了 `exec` 的具体实现，概括地讲，它会用从文件系统中获取的 `/init` 的二进制代码代替 `initcode` 的代码。现在 `initcode` 已经执行完了，进程将要运行 `/init`。 `init`（7810行）会在需要的情况下创建一个新的控制台设备文件，然后把它作为描述符0，1，2打开。接下来它将不断循环，开启控制台 shell，处理没有父进程的僵尸进程，直到 shell 退出，然后再反复。系统就这样建立起来了。
+
+## 操作系统的实现过程
+
+### 1. **为什么可以用 C 语言编写操作系统源码？**
+
+C 语言是一种通用的系统编程语言，特别擅长编写与硬件紧密相关的程序。C 语言的设计初衷之一就是用来编写操作系统，它提供了直接访问内存和硬件资源的能力。C 语言的高效性和灵活性使它成为编写操作系统代码的理想选择。
+
+操作系统的很多部分都需要直接操作硬件，比如内存管理、进程调度、文件系统等，而 C 语言的语法和特性（如指针操作、内存管理等）使得开发者可以高效地编写这些底层代码。
+
+### 2. **操作系统运行之前，PC 上是否空空如也？**
+
+当计算机刚刚启动时，确实没有操作系统在运行。但这并不意味着计算机是完全空的。计算机的硬件中有一个叫做 BIOS（或 UEFI）的固件，它包含在主板上的非易失性存储器中。BIOS 的主要任务是执行最初的硬件初始化，并启动操作系统。
+
+### 3. **用什么编译 C 语言程序？**
+
+C 语言的编译需要一个 C 编译器。常见的 C 编译器包括 GCC（GNU Compiler Collection）和 Clang 等。通常，操作系统的源代码会在一个现有的操作系统环境中编译。这意味着在你已经运行的操作系统上，比如 Linux 或 Windows，你可以使用 C 编译器来编译新的操作系统代码。
+
+### 4. **操作系统的启动过程**
+
+当计算机启动时，BIOS 会首先运行，它负责执行以下操作：
+
+- **硬件初始化**：检测并初始化所有硬件组件（如 CPU、内存、显卡、硬盘等）。
+- **寻找启动设备**：BIOS 会根据设置，查找启动设备（如硬盘、光盘、U盘等）上是否有可引导的操作系统。
+- **加载 Boot Loader**：一旦找到引导设备，BIOS 将从该设备加载一个小程序，称为引导加载程序（Boot Loader）。这个程序通常是操作系统的一部分，并被存储在硬盘的引导扇区（通常是 MBR 或 GPT 分区表的一部分）。
+- **启动操作系统内核**：引导加载程序负责将操作系统的内核从硬盘加载到内存中，然后将控制权交给操作系统内核。此时，操作系统内核开始执行，并接管系统的控制。
+
+### 5. **操作系统的编译和安装**
+
+在已经存在的操作系统（如 Linux、Windows 等）中，开发者可以使用 C 编译器将操作系统的源代码编译成二进制代码（通常是一个内核映像文件）。这个文件可以通过引导加载程序加载并执行。
+
+以下是一个操作系统开发的简要流程：
+
+1. **编写操作系统代码**：使用 C 语言和汇编语言编写操作系统的各个部分，包括内核、驱动程序、系统调用等。
+2. **编译**：使用 C 编译器（如 GCC）将 C 语言源码编译为机器代码，并链接为一个可执行的内核映像。
+3. **打包**：将编译好的内核映像、引导加载程序和其他必要的文件打包到一个磁盘映像中，供 BIOS/UEFI 加载和启动。
+4. **测试**：通过虚拟机（如 QEMU）或真实硬件测试操作系统的启动和运行。
+
+### 总结
+
+C 语言能够直接操作硬件资源，适合编写操作系统源码。操作系统的编译依赖现有操作系统中的编译器工具链。而计算机启动时，通过 BIOS 加载引导加载程序，再将操作系统内核加载到内存中运行，完成从无到有的启动过程。
+
 ## 实验内容
 
 ### 1. Boot xv6(easy)
 
+#### 环境
+
+* Ubuntu
+* git
+* qemu
+
+#### 运行截图
+
+![xv6启动](img/xv6启动.png)
+
+### 2. sleep()(easy)
+
+#### 代码实现
+
+```c
+#include "kernel/types.h" // 包含系统中常用的基本数据类型的定义
+#include "kernel/stat.h"  // 包含文件状态相关的结构和常量定义
+#include "user/user.h"    // 包含用户空间程序所需的系统调用声明
+
+// 主函数入口，argc 是命令行参数的个数，argv 是参数的数组
+int main(int argc, char *argv[])
+{
+    // 如果命令行参数不等于2（程序名和时间参数），输出使用说明并退出
+    if (argc != 2)
+    {
+        fprintf(2, "Usage: sleep time_in_ticks\n"); // 错误输出到文件描述符2（标准错误）
+        exit(1);                                    // 以错误码1退出程序
+    }
+
+    // 使用 atoi 函数将字符串参数转化为整数
+    int time = atoi(argv[1]);
+
+    // 检查转换后的结果是否合法
+    if (time <= 0)
+    {
+        fprintf(2, "Error: Invalid time argument. Please enter a positive integer.\n");
+        exit(1);
+    }
+
+    // 调用 sleep 系统调用，暂停执行指定的时间（tick）
+    // 如果 sleep 调用失败（返回值不为0），输出错误信息
+    if (sleep(time) != 0)
+    {
+        fprintf(2, "Error in sleep sys_call!\n"); // 错误信息输出到标准错误
+    }
+
+    // 程序执行完毕，正常退出
+    exit(0);
+}
+
+```
+
+#### 详细解释
+
+1. **命令行参数检查：**
+
+   ```c
+   if (argc != 2) {
+       fprintf(2, "Usage: sleep time_in_ticks\n");
+       exit(1);
+   }
+   ```
+
+   - 这部分代码检查命令行参数的数量，确保用户传入了正确数量的参数。`argc` 表示命令行参数的个数，`argv` 是一个字符串数组，存储了各个参数。如果参数数量不等于 2（即程序名和时间参数），程序会输出使用说明，并以错误码 `1` 退出。
+
+2. **字符串转换为整数：**
+
+   ```c
+   int time = atoi(argv[1]);
+   ```
+
+   - 在这一部分，`atoi` 函数将用户输入的时间参数（即 `argv[1]`）转换为整数，并存储在 `time` 变量中。`atoi` 是一个简单的字符串转换函数，它将字符串转为整数，但不会检测字符串中的非法字符，因此对于简单的整数转换任务，它是足够的。
+
+3. **转换结果检查：**
+
+   ```c
+   if (time <= 0) {
+       fprintf(2, "Error: Invalid time argument. Please enter a positive integer.\n");
+       exit(1);
+   }
+   ```
+
+   - 这里对转换后的 `time` 进行检查。如果 `time` 是负数或 0，程序会输出错误信息并退出。这样可以确保用户输入的时间参数是一个正整数。
+
+4. **系统调用和错误处理：**
+
+   ```c
+   if (sleep(time) != 0) {
+       fprintf(2, "Error in sleep sys_call!\n");
+   }
+   ```
+
+   - 这一部分代码调用了 `sleep` 系统调用，程序会暂停执行指定的时间（以系统的时钟周期为单位）。如果 `sleep` 系统调用返回值不为 0，表示系统调用过程中出现了错误，程序会输出错误信息。
+
+5. **程序正常退出：**
+
+   ```c
+   exit(0);
+   ```
+
+   - 如果程序成功完成了所有任务，它将以状态码 `0` 正常退出。这表示程序按预期执行且没有遇到任何错误。
+
+#### 原理解释
+
+- **`atoi(argv[1])` 的原理：**
+  - `argv[1]` 是用户输入的时间参数。`atoi` 函数将这个字符串转换为整数，并存储在 `time` 变量中。`atoi` 函数虽然无法处理非法字符，但对于预期是简单数字输入的情况（如这里的时间参数），它是一个有效的解决方案。
+- **为什么使用 `atoi` 而不是 `strtol`：**
+  - `strtol` 函数提供了更多的错误检测机制，例如它可以检测输入字符串中非法字符的存在，帮助判断输入是否有效。然而，`atoi` 函数更简单，且在很多情况下足够使用。`strtol` 可能更适用于需要处理复杂输入的场景，而在这个 `sleep` 程序中，`atoi` 作为简单的字符串到整数转换工具是合适的。
+
+#### 添加到`Makefile`
+
+![将sleep添加到Makefile](img/将sleep添加到Makefile.png)
+
+#### 测试成功
+
+![sleep-test](img/sleep-test.png)
