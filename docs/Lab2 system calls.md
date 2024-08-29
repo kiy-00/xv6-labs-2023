@@ -1429,6 +1429,10 @@ procdump(void)
 
 ### Using gdb(easy)
 
+#### 任务
+
+* 学习如何使用 GDB 进行调试本 xv6。
+
 #### 步骤
 
 * 在终端输入：`make qemu-gdb`。然后再打开一个终端，运行 `gdb-multiarch -x .gdbinit`。这将运行 `.gdbinit` 中的命令，也就是开启远程调试功能，并设置`arch`架构为 `riscv64`。
@@ -1567,3 +1571,20 @@ procdump(void)
 * 可以看到，这个`initcode` 的 pid 为 1。
 * ==Q6: What is the name of the binary that was running when the kernel paniced? What is its process id (`pid`)?==
 * A: 这个二进制的名字为 `initcode` ，其 process id 为 1。
+
+### System call tracing (moderate)
+
+#### 任务
+
+* 此任务会增加一个系统调用追踪功能，它将会在后续实验的调试时有所帮助。课程提供了一个 `trace` 程序，它将会运行并开始另一个程序的系统调用追踪功能（tracing enable），此程序位于 `user/trace.c`。其参数为一个掩码 mask ，用来指示其要追踪的系统调用。例如 `trace(1 << SYS_fork)`，`SYS_fork` 为系统调用号在文件 `kernel/syscall.h` 中。如果系统调用号被设置在掩码中，你必须修改 xv6 内核，当每一个追踪的系统调用将要返回的时候打印一行信息。这一行信息包含进程 id，系统调用的名字和要返回的值。你不需要打印系统调用的参数。`trace` 系统调用应该启用它调用的程序和它调用程序的每一个子程序的追踪功能，但是不能影响其他进程。
+
+#### 添加到`Makefile`
+
+* 将 `$U/_trace` 添加到 Makefile 的 UPROGS 中。
+
+#### 添加`trace`系统调用的定义
+
+* 在 `user/user.h` 中添加这个系统调用的函数原型；
+* 在 `user/usys.pl` 中添加一个 `entry` ，它将会生成 `user/usys.S` ，里面包含真实的汇编代码，它使用 Risc V 的 `ecall` 指令陷入内核，执行系统调用；
+* 在 `kernel/syscal.h` 中添加一个系统调用号；
+
