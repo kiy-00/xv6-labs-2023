@@ -2755,7 +2755,7 @@ int main(int argc, char* argv[])
 
 #### 代码位置
 
-
+https://github.com/kiy-00/xv6-labs-2023/blob/util/user/primes.c
 
 #### 主要步骤和功能解释
 
@@ -3076,7 +3076,7 @@ int main(int argc, char* argv[])
 
 #### 代码位置
 
-
+https://github.com/kiy-00/xv6-labs-2023/blob/util/user/find.c
 
 #### 原理解释
 
@@ -3223,7 +3223,7 @@ main(int argc, char* argv[])
 
 #### 代码位置
 
-
+https://github.com/kiy-00/xv6-labs-2023/blob/util/user/xargs.c
 
 #### 代码原理
 
