@@ -3238,3 +3238,14 @@ main(int argc, char* argv[])
 
 `xargs` 程序的功能在于能够批量处理输入，将每行输入作为参数传递给指定的命令，并逐行执行命令。这在处理大量数据或自动化任务时非常有用。例如，结合 `find` 命令使用，可以对查找到的每个文件执行特定的操作。`xargs` 通过这种方式实现了高效的批量处理，避免了手动一一执行命令的繁琐。
 
+#### 添加到`Makefile`
+
+![将xargs添加到Makefile](img/将xargs添加到Makefile.png)
+
+#### 测试成功
+
+![xargs-test](img/xargs-test.png)
+
+## 实验得分
+
+![Lab1得分](img/Lab1得分.png)
