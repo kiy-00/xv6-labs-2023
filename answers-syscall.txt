@@ -1,0 +1,4 @@
+Q1：Looking at the backtrace output, which function called syscall?
+
+通过堆栈回溯可以看到，函数 `usertrap()` 调用了 `syscall()` 函数。
+
