@@ -190,7 +190,7 @@ UPROGS=\
 	$U/_zombie\
 	$U/_sleep\
 	$U/_pingpong\
-	# 添加pingpong程序
+	$U/_primes\
 
 
 
