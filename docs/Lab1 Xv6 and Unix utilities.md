@@ -2753,7 +2753,11 @@ int main(int argc, char* argv[])
 
 这个代码实现了一个并发的质数筛选程序，使用管道（pipe）和进程（process）来模拟埃拉托斯特尼筛法（Sieve of Eratosthenes）。每个质数都有一个独立的进程负责筛除它的倍数，而这些进程通过管道进行通信。
 
-##### 主要步骤和功能解释
+#### 代码位置
+
+
+
+#### 主要步骤和功能解释
 
 1. **主进程初始化：**
    - 主进程首先创建一个管道 `p[2]`。
@@ -2766,7 +2770,7 @@ int main(int argc, char* argv[])
 3. **多进程筛选的递归实现：**
    - 对于每一个新的质数，程序都会生成一个新的进程，这个进程会负责筛选所有不能被该质数整除的数字，并将这些数字传递给下一个进程。
 
-##### 示例与图解
+#### 示例与图解
 
 让我们以筛选 2 到 10 之间的质数为例，来详细描述这个过程。
 
@@ -2787,6 +2791,8 @@ int main(int argc, char* argv[])
   - 读取 `newfd[0]` 中的第一个数字 7，判断它是质数，打印 "prime 7"。
 
 在这一系列的操作中，每个进程只处理那些在它负责的质数筛选下无法被整除的数字，因此实现了质数的筛选。
+
+
 
 #### 过程图解
 
@@ -2819,3 +2825,269 @@ int main(int argc, char* argv[])
 在 `read` 和 `write` 操作中，`4` 代表要读取或写入的字节数。每个整数在内存中占用 4 个字节，因此 `4` 指定了读取或写入一个整数所需要的字节数。
 
 通过这段代码和解释，程序可以有效地筛选出质数，并通过创建多个进程和管道完成筛选任务。
+
+#### 添加到`Makefile`
+
+![将primes添加到Makefile](img/将primes添加到Makefile.png)
+
+#### 测试成功
+
+![primes-test](img/primes-test.png)
+
+
+
+### 5. find()(moderate)
+
+#### 任务
+
+* 编写一个简单版本的 UNIX `find` 程序，用于在 xv6 中查找目录树中具有特定名称的所有文件。你的解决方案应该写在 `user/find.c` 文件中。
+
+#### `user/ls.c`解读
+
+##### 源码
+
+```c
+#include "kernel/types.h"  // 包含基本数据类型定义
+#include "kernel/stat.h"   // 包含文件状态相关结构和常量定义
+#include "user/user.h"     // 包含用户空间程序的系统调用声明
+#include "kernel/fs.h"     // 包含文件系统相关的结构和常量定义
+#include "kernel/fcntl.h"  // 包含文件控制相关的常量定义
+
+// 格式化文件名，将路径中的文件名部分提取出来
+char* fmtname(char *path)
+{
+  static char buf[DIRSIZ+1]; // 缓冲区，用于存放格式化后的文件名
+  char *p;
+
+  // 从路径字符串的末尾开始，找到最后一个 '/' 后面的字符（即文件名部分）
+  for(p=path+strlen(path); p >= path && *p != '/'; p--)
+    ;
+  p++;
+
+  // 如果文件名长度超过DIRSIZ（最大文件名长度），则直接返回文件名部分
+  if(strlen(p) >= DIRSIZ)
+    return p;
+
+  // 否则，将文件名复制到缓冲区并填充空格，以保持长度一致
+  memmove(buf, p, strlen(p));
+  memset(buf+strlen(p), ' ', DIRSIZ-strlen(p));
+  return buf;
+}
+
+// 列出给定路径的文件信息
+void ls(char *path)
+{
+  char buf[512], *p;         // 缓冲区和指针，用于构建完整的路径
+  int fd;                    // 文件描述符
+  struct dirent de;          // 目录项结构，用于保存目录中的文件信息
+  struct stat st;            // 文件状态结构，用于保存文件的详细信息
+
+  // 打开给定路径的文件或目录
+  if((fd = open(path, O_RDONLY)) < 0){
+    fprintf(2, "ls: cannot open %s\n", path);  // 打开失败则输出错误信息
+    return;
+  }
+
+  // 获取文件或目录的状态信息
+  if(fstat(fd, &st) < 0){
+    fprintf(2, "ls: cannot stat %s\n", path);  // 获取状态信息失败则输出错误信息
+    close(fd);
+    return;
+  }
+
+  // 根据文件类型分别处理
+  switch(st.type){
+  case T_DEVICE:  // 设备文件
+  case T_FILE:    // 普通文件
+    // 输出文件名、文件类型、inode号、文件大小
+    printf("%s %d %d %l\n", fmtname(path), st.type, st.ino, st.size);
+    break;
+
+  case T_DIR:     // 目录
+    // 检查路径长度是否超出缓冲区大小
+    if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
+      printf("ls: path too long\n");
+      break;
+    }
+
+    // 复制路径到缓冲区，并在后面添加 '/'
+    strcpy(buf, path);
+    p = buf+strlen(buf);
+    *p++ = '/';
+
+    // 读取目录中的每个目录项
+    while(read(fd, &de, sizeof(de)) == sizeof(de)){
+      if(de.inum == 0)  // 如果目录项为空则跳过
+        continue;
+
+      // 将目录项的文件名附加到缓冲区的路径后面
+      memmove(p, de.name, DIRSIZ);
+      p[DIRSIZ] = 0;
+
+      // 获取目录项对应文件的状态信息
+      if(stat(buf, &st) < 0){
+        printf("ls: cannot stat %s\n", buf);  // 获取失败则输出错误信息
+        continue;
+      }
+
+      // 输出目录项的文件名、文件类型、inode号、文件大小
+      printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
+    }
+    break;
+  }
+  close(fd);  // 关闭文件描述符
+}
+
+// 主函数，处理命令行参数并调用ls函数
+int main(int argc, char *argv[])
+{
+  int i;
+
+  // 如果没有传递参数，则列出当前目录下的文件
+  if(argc < 2){
+    ls(".");
+    exit(0);
+  }
+
+  // 如果传递了多个路径，则逐个路径调用ls函数
+  for(i=1; i<argc; i++)
+    ls(argv[i]);
+
+  exit(0);  // 退出程序
+}
+```
+
+##### 代码解读
+
+1. **`fmtname` 函数**：
+   - 该函数用于格式化文件名，将路径中的最后一部分（即文件名）提取出来。首先它从路径字符串的末尾开始，向前查找最后一个 `/` 的位置，然后返回 `/` 后面的文件名部分。如果文件名长度超过最大文件名长度 `DIRSIZ`，则直接返回文件名，否则将其填充至 `DIRSIZ` 长度。
+2. **`ls` 函数**：
+   - 该函数是 `ls` 命令的实现，用于列出给定路径的文件信息。
+   - 首先，它打开指定路径的文件或目录，并获取其状态信息。
+   - 然后，它根据文件类型决定如何处理。如果是普通文件或设备文件，直接输出其信息。如果是目录，则读取目录中的每个目录项，递归列出目录中的文件。
+3. **目录读取原理**：
+   - 在读取目录时，`ls` 函数使用 `read` 函数逐个读取目录中的目录项（`struct dirent`），每个目录项包含一个文件的名称和 inode 编号。通过这些信息，`ls` 函数能够构建出完整的文件路径，并使用 `stat` 函数获取文件的详细状态信息，最后将其格式化输出。
+
+#### 代码实现
+
+```c
+#include "kernel/types.h"  // 包含基本数据类型定义
+#include "kernel/stat.h"   // 包含文件状态相关结构和常量定义
+#include "kernel/fs.h"     // 包含文件系统相关的结构和常量定义
+#include "user/user.h"     // 包含用户空间程序的系统调用声明
+
+// 去除字符串后面的空格
+char* rtrim(char* path)
+{
+    static char newStr[DIRSIZ+1];  // 用于存储去除空格后的字符串
+    int whiteSpaceSize = 0;  // 计算路径末尾的空格数
+    int bufSize = 0;  // 去除空格后的字符串长度
+    // 从路径字符串末尾向前遍历，统计空格数
+    for(char* p = path + strlen(path) - 1; p >= path && *p == ' '; --p) {
+        ++whiteSpaceSize;
+    }
+    bufSize = DIRSIZ - whiteSpaceSize;  // 计算去除空格后的有效长度
+    memmove(newStr, path, bufSize);  // 将有效部分复制到新字符串中
+    newStr[bufSize] = '\0';  // 添加字符串结束符
+    return newStr;  // 返回去除空格后的字符串
+}
+
+// 在目录树中查找特定文件名的文件
+void find(char* path, char* name)
+{
+    char buf[512], *p;  // 缓冲区和指针，用于构建完整的路径
+    int fd;  // 文件描述符
+    struct dirent de;  // 目录项结构，用于保存目录中的文件信息
+    struct stat st;  // 文件状态结构，用于保存文件的详细信息
+
+    // 打开给定路径的目录
+    if ((fd = open(path, 0)) < 0) {
+        fprintf(2, "find: cannot open %s\n", path);  // 打开失败则输出错误信息
+        return;
+    }
+
+    // 获取目录的状态信息
+    if (fstat(fd, &st) == -1) {
+        fprintf(2, "find: cannot fstat %s\n", path);  // 获取状态信息失败则输出错误信息
+        close(fd);
+        return;
+    }
+
+    switch (st.type) {
+        case T_DEVICE:  // 设备文件
+        case T_FILE:    // 普通文件
+            fprintf(2, "find: %s not a path value.\n", path);  // 如果给定路径不是目录，则提示错误
+            close(fd);
+            break;
+        case T_DIR:     // 目录
+            // 检查路径长度是否超出缓冲区大小
+            if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
+                printf("ls: path too long\n");
+                break;
+            }
+            // 复制路径到缓冲区，并在后面添加 '/'
+            strcpy(buf, path);
+            p = buf + strlen(buf);
+            *p++ = '/';
+            // 读取目录中的每个目录项
+            while (read(fd, &de, sizeof(de)) == sizeof de) {
+                if (de.inum == 0)  // 如果目录项为空则跳过
+                    continue;
+                // 跳过 '.' 和 '..' 目录
+                if (strcmp(".", rtrim(de.name)) == 0 || strcmp("..", rtrim(de.name)) == 0)
+                    continue;
+                // 将目录项的文件名附加到缓冲区的路径后面
+                memmove(p, de.name, DIRSIZ);
+                // 创建一个以 '\0' 结尾的字符串
+                p[DIRSIZ] = '\0';
+                // 获取目录项对应文件的状态信息
+                if (stat(buf, &st) == -1) {
+                    fprintf(2, "find: cannot stat '%s'\n", buf);  // 获取失败则输出错误信息
+                    continue;
+                }
+                // 如果是文件或设备文件，且名称匹配则输出路径
+                if (st.type == T_DEVICE || st.type == T_FILE) {
+                    if (strcmp(name, rtrim(de.name)) == 0) {
+                        printf("%s\n", buf);  // 输出匹配的文件路径
+                    }
+                }
+                // 如果是目录，则递归调用 find 函数继续查找
+                else if (st.type == T_DIR) {
+                    find(buf, name);
+                }
+            }
+    }
+    close(fd);  // 关闭文件描述符
+}
+
+// 主函数，处理命令行参数并调用 find 函数
+int main(int argc, char* argv[])
+{
+    if (argc != 3) {  // 检查命令行参数数量
+        fprintf(2, "Usage: find path file.\n");  // 参数数量不对则提示使用方法
+        exit(0);
+    }
+    char* path = argv[1];  // 获取路径参数
+    char* name = argv[2];  // 获取文件名参数
+    find(path, name);  // 调用 find 函数查找文件
+    exit(0);  // 退出程序
+}
+```
+
+#### 代码位置
+
+
+
+#### 原理解释
+
+`find` 程序的目的是在指定目录及其子目录中查找所有与指定名称匹配的文件。它使用递归方法逐层深入目录树，检查每个文件或子目录，并在找到匹配的文件时输出其路径。
+
+- **递归查找**：
+  - `find` 函数首先打开并获取指定路径的状态信息。如果路径是一个目录，它会遍历该目录中的每个文件或子目录，并检查其名称是否与给定的名称匹配。如果匹配，则输出文件路径；如果该目录项是一个子目录，则递归调用 `find` 函数进一步查找。
+- **与 `ls` 的关系**：
+  - `find` 和 `ls` 都使用了相似的方法来遍历目录，读取目录项并获取文件状态信息。`ls` 的功能是列出目录中的文件及其信息，而 `find` 则是在目录树中递归查找特定名称的文件。因此，`find` 可以被视为 `ls` 的扩展，它增加了递归功能和名称匹配检查。
+
+#### 总结
+
+这个代码实现了 `find` 命令，它能够在目录树中查找与指定名称匹配的文件，并输出它们的完整路径。该程序通过递归函数遍历目录树，并使用字符串比较来实现文件查找。它与 `ls` 的实现有许多相似之处，主要区别在于递归处理和名称匹配的逻辑。
+
