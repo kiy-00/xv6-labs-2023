@@ -1508,9 +1508,20 @@ procdump(void)
 * ==Q3: What was the previous mode that the CPU was in?==
 * 用户模式（User Mode）。
 
-* 将位于`kernel/syscall.c`中的`syscall`函数修改
+* 将位于`kernel/syscall.c`中的`syscall`函数修改，替换 `syscall()` 函数中的 `num = p->trapframe->a7;` 为 `num = * (int *) 0;`，然后运行 `make qemu`。这样会看到一个 panic 信息。
 
-  
+  <img src="img/change-syscall.png" alt="change-syscall" style="zoom:67%;" />
+
+  <img src="img/panic.png" alt="panic" style="zoom:67%;" />
+
+* 这里的 `sepc` 指代内核发生 panic 的代码地址。可以在 `kernel/kernel.asm` 中查看编译后的完整内核汇编代码，在其中搜索这个地址既可以找到使内核 panic 的代码。`sepc` 的值不是固定不变的。
+
+  <img src="img/asm.png" alt="asm" style="zoom:50%;" />
+
+* 可以看到，果然是 `num = * (int *) 0;` 使内核 panic。对应的汇编则是 `lw a3,0(zero)`。
+
+* 所以这条汇编代码代表：将内存中地址从 0 开始的一个字 word （2 bytes) 大小的数据加载到寄存器 `a3` 中。
 
 * ==Q4: Write down the assembly instruction the kernel is panicing at. Which register corresponds to the varialable `num`?==
-* 内核 panic 在 `lw a3,0(zero)`。`num` 代表 `a3` 寄存器。
+
+* A: 内核 panic 在 `lw a3,0(zero)`。`num` 代表 `a3` 寄存器。
