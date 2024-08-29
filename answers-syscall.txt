@@ -1,4 +1,24 @@
-Q1：Looking at the backtrace output, which function called syscall?
+Q1：Looking at the backtrace output, which function called `syscall`?
 
 通过堆栈回溯可以看到，函数 `usertrap()` 调用了 `syscall()` 函数。
 
+Q2: What is the value of `p->trapframe->a7` and what does that value represent? (Hint: look `user/initcode.S`, the first user program xv6 starts.)
+
+根据参考教材 [xv6 book](https://pdos.csail.mit.edu/6.828/2022/xv6/book-riscv-rev1.pdf) 第二章和 `user/initcode.S` 中的代码可知，这个 `a7` 寄存器中保存了将要执行的系统调用号。这里的系统调用号为 `7`，在 `kernel/syscall.h` 中可以找到，这个系统调用为 `SYS_exec` 。
+
+Q3: What was the previous mode that the CPU was in?
+
+用户模式（User Mode）
+
+Q4: Write down the assembly instruction the kernel is panicing at. Which register corresponds to the varialable `num`?
+
+A: 内核 panic 在 `lw a3,0(zero)`。`num` 代表 `a3` 寄存器。
+
+Q5: Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in `scause` above? (See description of `scause` in [RISC-V privileged instructions](https://pdos.csail.mit.edu/6.828/2022/labs/n//github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf))
+
+内核因为加载了一个未使用的地址 0 处的内存数据而崩溃（Load page fault）。地址 0 并不映射到内核空间中（从 `0x80000000` 开始）。`scause` 中的异常代码证实了上述观点。
+
+
+Q6: What is the name of the binary that was running when the kernel paniced? What is its process id (`pid`)?
+
+A: 这个二进制的名字为 `initcode` ，其 process id 为 1。

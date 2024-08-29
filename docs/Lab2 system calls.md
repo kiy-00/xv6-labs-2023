@@ -1540,3 +1540,30 @@ procdump(void)
 * ==Q5: Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in `scause` above? (See description of `scause` in [RISC-V privileged instructions](https://pdos.csail.mit.edu/6.828/2022/labs/n//github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf))==
 
 * A: 内核因为加载了一个未使用的地址 0 处的内存数据而崩溃（Load page fault）。地址 0 并不映射到内核空间中（从 `0x80000000` 开始）。`scause` 中的异常代码证实了上述观点。
+
+* 上述 `scuase` 指明了内核 panic 的原因。但是有时候我们需要知道，是哪一个用户程序调用 syscall 时发生了 panic。这可以通过打印 `proc` 结构体中的 `name` 来查看。
+
+* 重新启动 qemu 和 gdb。
+
+* 输入下列命令
+
+  ```bash
+  (gdb) b syscall
+  (gdb) c
+  (gdb) layout src
+  (gdb) n
+  (gdb) n
+  (gdb) p p->name
+  ```
+
+  <img src="img/initcode.png" alt="initcode" style="zoom:67%;" />
+
+* 可以看到，这个用户程序是 `initcode` ，也是 xv6 第一个 process。
+
+  打印 `proc` 结构体可以查看这个进程的其他信息。
+
+  <img src="img/struct-proc.png" alt="struct-proc" style="zoom:67%;" />
+
+* 可以看到，这个`initcode` 的 pid 为 1。
+* ==Q6: What is the name of the binary that was running when the kernel paniced? What is its process id (`pid`)?==
+* A: 这个二进制的名字为 `initcode` ，其 process id 为 1。
