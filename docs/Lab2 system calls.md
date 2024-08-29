@@ -1525,3 +1525,18 @@ procdump(void)
 * ==Q4: Write down the assembly instruction the kernel is panicing at. Which register corresponds to the varialable `num`?==
 
 * A: 内核 panic 在 `lw a3,0(zero)`。`num` 代表 `a3` 寄存器。
+
+* 再次运行虚拟器和 GDB 调试。将断点设置在发生 panic 处。
+
+* 再次输入 `n` 之后会发生 panic，此时输入 `Ctrl + C` 结束。查看 `scase` 寄存器，它代指内核 panic 的原因，查看文档[RISC-V privileged instructions](https://pdos.csail.mit.edu/6.828/2022/labs/n//github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf) 4.1.8 章节。
+
+  <img src="img/scause-register.png" alt="scause-register" style="zoom:67%;" />
+
+* 所以这里的 `13` 代表 `Load page fault` 。就是从内存地址 0 中 加载数据到寄存器 `a3` 时出错。
+
+  <img src="img/内存.png" alt="内存" style="zoom:67%;" />
+
+* 可以看到，在左侧 Virtual Address 中的地址 0 处对应右侧 Physical Address 的 Unused，表示这个地址没有被使用。而 Kernel 是从虚拟地址的 `0x80000000` 处开始的。
+* ==Q5: Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in `scause` above? (See description of `scause` in [RISC-V privileged instructions](https://pdos.csail.mit.edu/6.828/2022/labs/n//github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf))==
+
+* A: 内核因为加载了一个未使用的地址 0 处的内存数据而崩溃（Load page fault）。地址 0 并不映射到内核空间中（从 `0x80000000` 开始）。`scause` 中的异常代码证实了上述观点。
