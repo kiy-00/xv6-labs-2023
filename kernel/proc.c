@@ -274,57 +274,60 @@ growproc(int n)
   return 0;
 }
 
-// Create a new process, copying the parent.
-// Sets up child kernel stack to return as if from fork() system call.
+// 创建一个新进程，复制父进程。
+// 设置子进程的内核栈，以便从 fork() 系统调用中返回。
 int
 fork(void)
 {
   int i, pid;
-  struct proc *np;
-  struct proc *p = myproc();
+  struct proc *np; // 新进程的结构体指针
+  struct proc *p = myproc(); // 当前进程的结构体指针，即父进程
 
-  // Allocate process.
+  // 分配一个新的进程结构体。
   if((np = allocproc()) == 0){
-    return -1;
+    return -1; // 如果分配失败，返回 -1。
   }
 
-  // Copy user memory from parent to child.
+  // 复制父进程的用户内存到子进程中。
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
-    release(&np->lock);
-    return -1;
+    freeproc(np); // 如果复制失败，释放已分配的资源。
+    release(&np->lock); // 释放子进程的锁。
+    return -1; // 返回 -1 表示失败。
   }
-  np->sz = p->sz;
+  np->sz = p->sz; // 将父进程的内存大小复制给子进程。
 
-  // copy saved user registers.
+  // 复制父进程的 trace 掩码值给子进程。
+  np->mask = p->mask;
+
+  // 复制父进程的 trapframe（保存的用户寄存器状态）。
   *(np->trapframe) = *(p->trapframe);
 
-  // Cause fork to return 0 in the child.
+  // 使得 fork 在子进程中返回 0。
   np->trapframe->a0 = 0;
 
-  // increment reference counts on open file descriptors.
+  // 增加已打开文件描述符的引用计数，并复制给子进程。
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
-  np->cwd = idup(p->cwd);
+  np->cwd = idup(p->cwd); // 复制当前工作目录
 
+  // 复制父进程的名称到子进程。
   safestrcpy(np->name, p->name, sizeof(p->name));
 
-  pid = np->pid;
+  pid = np->pid; // 获取子进程的进程 ID
 
-  release(&np->lock);
+  release(&np->lock); // 释放子进程的锁
 
-  acquire(&wait_lock);
-  np->parent = p;
-  release(&wait_lock);
+  acquire(&wait_lock); // 获取全局的等待锁
+  np->parent = p; // 设置子进程的父进程为当前进程
+  release(&wait_lock); // 释放等待锁
 
-  acquire(&np->lock);
-  np->state = RUNNABLE;
-  release(&np->lock);
+  acquire(&np->lock); // 再次获取子进程的锁
+  np->state = RUNNABLE; // 设置子进程状态为可运行状态
+  release(&np->lock); // 释放子进程的锁
 
-  return pid;
+  return pid; // 返回子进程的进程 ID
 }
-
 // Pass p's abandoned children to init.
 // Caller must hold wait_lock.
 void
