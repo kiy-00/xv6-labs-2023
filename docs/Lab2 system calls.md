@@ -1966,5 +1966,10 @@ sys_sysinfo(void)
 #include "sysinfo.h"
 ```
 
+#### 涉及到的文件
+
+<img src="img/log.png" alt="log" style="zoom:67%;" />
+
 #### 测试结果
 
+<img src="img/test-sysinfo.png" alt="test-sysinfo" style="zoom:67%;" />
