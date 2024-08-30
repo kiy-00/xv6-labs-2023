@@ -397,3 +397,14 @@ extern uint64 sys_sigreturn(void);
 [SYS_sigreturn] sys_sigreturn
 ```
 
+#### 测试成功
+
+<img src="img/alarmtest.png" alt="alarmtest" style="zoom:67%;" />
+
+#### 涉及到的文件
+
+<img src="img/log.png" alt="log" style="zoom:67%;" />
+
+### 实验得分
+
+<img src="img/score.png" alt="score" style="zoom:67%;" />
