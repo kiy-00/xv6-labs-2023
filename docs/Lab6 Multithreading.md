@@ -264,3 +264,7 @@ barrier()
   pthread_mutex_unlock(&bstate.barrier_mutex); // Unlock the mutex
 }
 ```
+
+### 实验得分
+
+<img src="img/score.png" alt="score" style="zoom:67%;" />
