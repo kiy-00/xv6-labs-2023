@@ -169,6 +169,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  
+  // trace
+  p->trace_mask = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -274,60 +277,82 @@ growproc(int n)
   return 0;
 }
 
-// 创建一个新进程，复制父进程。
-// 设置子进程的内核栈，以便从 fork() 系统调用中返回。
-int
-fork(void)
-{
-  int i, pid;
-  struct proc *np; // 新进程的结构体指针
-  struct proc *p = myproc(); // 当前进程的结构体指针，即父进程
+// Create a new process, copying the parent.
+// Sets up child kernel stack to return as if from fork() system call.
+int fork(void) {
+    int i, pid;
+    struct proc *np;
+    struct proc *p = myproc();
 
-  // 分配一个新的进程结构体。
-  if((np = allocproc()) == 0){
-    return -1; // 如果分配失败，返回 -1。
-  }
+    // Allocate process.
+    if ((np = allocproc()) == 0) {
+        return -1;
+    }
 
-  // 复制父进程的用户内存到子进程中。
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np); // 如果复制失败，释放已分配的资源。
-    release(&np->lock); // 释放子进程的锁。
-    return -1; // 返回 -1 表示失败。
-  }
-  np->sz = p->sz; // 将父进程的内存大小复制给子进程。
+    // Copy user memory from parent to child.
+    if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+    np->sz = p->sz;
 
-  // 复制父进程的 trace 掩码值给子进程。
-  np->mask = p->mask;
+    // Copy trace mask value
+    np->trace_mask = p->trace_mask;
 
-  // 复制父进程的 trapframe（保存的用户寄存器状态）。
-  *(np->trapframe) = *(p->trapframe);
+    // Copy saved user registers.
+    *(np->trapframe) = *(p->trapframe);
 
-  // 使得 fork 在子进程中返回 0。
-  np->trapframe->a0 = 0;
+    // Cause fork to return 0 in the child.
+    np->trapframe->a0 = 0;
 
-  // 增加已打开文件描述符的引用计数，并复制给子进程。
-  for(i = 0; i < NOFILE; i++)
-    if(p->ofile[i])
-      np->ofile[i] = filedup(p->ofile[i]);
-  np->cwd = idup(p->cwd); // 复制当前工作目录
+    // Increment reference counts on open file descriptors.
+    for (i = 0; i < NOFILE; i++) {
+        if (p->ofile[i]) {
+            if ((np->ofile[i] = filedup(p->ofile[i])) == 0) {
+                // If filedup fails, cleanup and exit
+                while (--i >= 0) {
+                    if (np->ofile[i]) {
+                        fileclose(np->ofile[i]);
+                    }
+                }
+                freeproc(np);
+                release(&np->lock);
+                return -1;
+            }
+        }
+    }
 
-  // 复制父进程的名称到子进程。
-  safestrcpy(np->name, p->name, sizeof(p->name));
+    // Duplicate the current working directory.
+    if ((np->cwd = idup(p->cwd)) == 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
 
-  pid = np->pid; // 获取子进程的进程 ID
+    // Copy process name
+    safestrcpy(np->name, p->name, sizeof(p->name));
 
-  release(&np->lock); // 释放子进程的锁
+    // Assign pid and set process to runnable
+    pid = np->pid;
 
-  acquire(&wait_lock); // 获取全局的等待锁
-  np->parent = p; // 设置子进程的父进程为当前进程
-  release(&wait_lock); // 释放等待锁
+    release(&np->lock);
 
-  acquire(&np->lock); // 再次获取子进程的锁
-  np->state = RUNNABLE; // 设置子进程状态为可运行状态
-  release(&np->lock); // 释放子进程的锁
+    // Set parent process and update wait_lock
+    acquire(&wait_lock);
+    np->parent = p;
+    release(&wait_lock);
 
-  return pid; // 返回子进程的进程 ID
+    // Finally, set the child process to runnable
+    acquire(&np->lock);
+    np->state = RUNNABLE;
+    release(&np->lock);
+
+    return pid;
 }
+
+
+
 // Pass p's abandoned children to init.
 // Caller must hold wait_lock.
 void

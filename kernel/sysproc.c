@@ -94,12 +94,16 @@ sys_uptime(void)
 
 //add trace
 
-+uint64
-+sys_trace(void)
-+{
-+  int n;
-+  argint(0, &n);
-+  myproc()->trace_bmp = n;
-+  return 0;
-+}
-+
+uint64
+sys_trace()
+{
+  int mask;
+
+  argint(0, &mask);
+
+  struct proc *pro = myproc();
+  printf("trace pid: %d\n", pro->pid);
+  pro->trace_mask = mask;
+
+  return 0;
+} 
