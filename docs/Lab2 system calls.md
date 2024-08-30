@@ -1973,3 +1973,9 @@ sys_sysinfo(void)
 #### 测试结果
 
 <img src="img/test-sysinfo.png" alt="test-sysinfo" style="zoom:67%;" />
+
+### 最终得分
+
+<img src="img/score.png" alt="score" style="zoom:67%;" />
+
+* 初步诊断应该是`fork()`的实现有问题，之后努力改进。
