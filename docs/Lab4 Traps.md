@@ -176,3 +176,224 @@ printf("x=%d y=%d", 3);
 
 * 通过之前的章节可知，函数的参数是通过寄存器`a1`, `a2` 等来传递。如果 `prinf` 少传递一个参数，那么其仍会从一个确定的寄存器中读取其想要的参数值，但是我们并没有给出这个确定的参数并将其存储在寄存器中，所以函数将从此寄存器中获取到一个随机的不确定的值作为其参数。故而此例中，`y=`后面的值我们不能够确定，它是一个垃圾值。
 * A: `y=` 之后的值为一个不确定的垃圾值。
+
+### Backtrace (moderate)
+
+#### 任务
+
+* 实现一个 `backtrace()` 函数，该函数用于调试时输出函数调用栈的回溯信息。这有助于理解程序在出现错误时的执行路径。我们将通过遍历栈帧并打印每个栈帧中的保存的返回地址来实现这个功能。
+
+#### 添加 `backtrace()` 函数原型
+
+* 首先，在 `kernel/defs.h` 文件中添加 `backtrace()` 函数的原型声明，以便在其他地方调用它：
+
+```c
+// printf.c
+void            printf(char*, ...);
+void            panic(char*) __attribute__((noreturn));
+void            printfinit(void);
+void 			backtrace(void);
+```
+
+* GCC 编译器将当前正在执行的函数的帧指针（frame pointer）存储到寄存器 `s0` 中。在 `kernel/riscv.h` 中添加以下代码：
+
+```c
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+```
+
+* 在 `backtrace` 中调用此函数，将会读取当前帧指针。`r_fp()` 使用[内联汇编](https://gcc.gnu.org/onlinedocs/gcc/Using-Assembly-Language-with-C.html)读取 `s0`。
+
+#### 在`kernel/printf.c`中添加函数
+
+```c
+void
+backtrace(void)
+{
+  uint64 fp_address = r_fp();
+  while(fp_address != PGROUNDDOWN(fp_address)) {
+    printf("%p\n", *(uint64*)(fp_address-8));
+    fp_address = *(uint64*)(fp_address - 16);
+  }
+}
+```
+
+* `PGROUNDDOWN(fp)` 总是表示 `fp` 所在的这一页的起始位置。
+
+#### 在`kernel/sysproc.c`中的`sys_sleep`函数中调用
+
+```c
+void sys_sleep(void){
+    ...
+    backtrace();
+    ...
+}
+```
+
+#### 编译并运行`bttest`
+
+<img src="img/test-1.png" alt="test-1" style="zoom:67%;" />
+
+#### 使用 `addr2line` 命令查看代码位置
+
+![test-2](img/test-2.png)
+
+### Alarm (hard)
+
+#### 任务
+
+* 在这个实验中，你将为 xv6 添加一个功能，定期向进程发出 CPU 时间警告。这个功能可以帮助计算密集型进程限制其使用的 CPU 时间，或者让进程在计算时也能执行一些周期性操作。本质上，你将实现一种原始的用户级中断/故障处理程序。实验的目的是让 `alarmtest` 通过，并且 `usertests -q` 成功运行。
+
+#### 修改`struct proc`
+
+* 首先在 `kernel/proc.h` 中的 `proc` 结构体中添加需要的内容。
+
+```c
+struct proc {
+    ...
+  // the virtual address of alarm handler function in user page
+  uint64 handler_va;
+  int alarm_interval;
+  int passed_ticks;
+  // save registers so that we can re-store it when return to interrupted code.   
+  struct trapframe saved_trapframe;
+  // the bool value which show that is or not we have returned from alarm handler.
+  int have_return;
+    ...
+}
+```
+
+#### 实现两个函数
+
+* 在 `kernel/sysproc.c` 中实现 `sys_sigalarm` 和 `sys_sigreturn` ：
+
+```c
+uint64
+sys_sigreturn(void)
+{
+  struct proc* proc = myproc();
+  // re-store trapframe so that it can return to the interrupt code before.
+  *proc->trapframe = proc->saved_trapframe;
+  proc->have_return = 1; // true
+  return proc->trapframe->a0;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int ticks;
+  uint64 handler_va;
+
+  argint(0, &ticks);
+  argaddr(1, &handler_va);
+  struct proc* proc = myproc();
+  proc->alarm_interval = ticks;
+  proc->handler_va = handler_va;
+  proc->have_return = 1; // true
+  return 0;
+}
+```
+
+* 注意到一点，`sys_sigreturn(void)` 的返回值不是 0，而是 `proc->trapframe->a0`。这是因为我们想要完整的恢复所有寄存器的值，包括 `a0`。但是一个系统调用返回的时候，它会将其返回值存到 `a0` 寄存器中，那这样就改变了之前 `a0` 的值。所以，我们干脆让其返回之前想要恢复的 `a0` 的值，那这样在其返回之后 `a0` 的值仍没有改变。
+
+#### 修改`usertrap()`函数
+
+* 然后修改 `kernel/trap.c` 中的 `usertrap` 函数。
+
+```c
+void
+usertrap(void) {
+  ...
+    // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2) {
+    struct proc *proc = myproc();
+    // if proc->alarm_interval is not zero
+    // and alarm handler is returned.
+    if (proc->alarm_interval && proc->have_return) {
+      if (++proc->passed_ticks == 2) {
+        proc->saved_trapframe = *p->trapframe;
+        // it will make cpu jmp to the handler function
+        proc->trapframe->epc = proc->handler_va;
+        // reset it
+        proc->passed_ticks = 0;
+        // Prevent re-entrant calls to the handler
+        proc->have_return = 0;
+      }
+    }
+    yield();
+  }
+  ...
+}
+```
+
+* 从内核跳转到用户空间中的 alarm handler 函数的关键一点就是：修改 `epc` 的值，使 trap 在返回的时候将 pc 值修改为该 alarm handler 函数的地址。这样，我们就完成了从内核调转到用户空间中的 alarm handler 函数。但是同时，我们也需要保存之前寄存器栈帧，因为后来 alarm handler 调用系统调用 `sys_sigreturn` 时会破坏之前保存的寄存器栈帧(p->trapframe)。
+
+#### 修改`Makefile`和添加系统调用
+
+##### `Makefile`
+
+```makefile
+UPROGS=\
+	$U/_cat\
+	$U/_echo\
+	$U/_forktest\
+	$U/_grep\
+	$U/_init\
+	$U/_kill\
+	$U/_ln\
+	$U/_ls\
+	$U/_mkdir\
+	$U/_rm\
+	$U/_sh\
+	$U/_stressfs\
+	$U/_usertests\
+	$U/_grind\
+	$U/_wc\
+	$U/_zombie\
+	$U/_alarmtest\
+```
+
+
+
+##### `user/user.h`
+
+```c
+int sigalarm(int ticks, void (*handler)());
+int sigreturn(void);
+```
+
+##### 更新 `user/usys.pl`
+
+* 在 `usys.pl` 文件中，添加 `sigalarm` 和 `sigreturn` 的系统调用入口，以便生成 `usys.S`。
+
+```c
+entry("sigalarm");
+entry("sigreturn");
+```
+
+
+
+##### 更新 `kernel/syscall.h` 和 `kernel/syscall.c`
+
+* 在 `syscall.h` 中添加 `SYS_sigalarm` 和 `SYS_sigreturn` 的定义。
+
+* 在 `syscall.c` 中，将 `sys_sigalarm` 和 `sys_sigreturn` 添加到 `syscalls` 数组中。
+
+```c
+#define SYS_sigalarm 22
+#define SYS_sigreturn 23
+```
+
+```c
+extern uint64 sys_sigalarm(void);
+extern uint64 sys_sigreturn(void);
+
+[SYS_sigalarm]  sys_sigalarm,
+[SYS_sigreturn] sys_sigreturn
+```
+
