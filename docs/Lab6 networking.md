@@ -234,3 +234,4 @@ void sock_close(struct sock* sock){
 
 ### 实验得分
 
+<img src="img/score.png" alt="score" style="zoom:67%;" />
