@@ -1709,54 +1709,85 @@ freeproc(struct proc *p)
 ```c
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
-int
-fork(void)
-{
-  int i, pid;
-  struct proc *np;
-  struct proc *p = myproc();
+int fork(void) {
+    int i, pid;
+    struct proc *np;
+    struct proc *p = myproc();
 
-  // Allocate process.
-  if((np = allocproc()) == 0){
-    return -1;
-  }
+    // Allocate process.
+    if ((np = allocproc()) == 0) {
+        return -1;
+    }
 
-  // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
+    // Copy user memory from parent to child.
+    if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+    np->sz = p->sz;
+
+    // Copy trace mask value
+    np->trace_mask = p->trace_mask;
+
+    // Copy saved user registers.
+    *(np->trapframe) = *(p->trapframe);
+
+    // Cause fork to return 0 in the child.
+    np->trapframe->a0 = 0;
+
+    // Increment reference counts on open file descriptors.
+    for (i = 0; i < NOFILE; i++) {
+        if (p->ofile[i]) {
+            if ((np->ofile[i] = filedup(p->ofile[i])) == 0) {
+                // If filedup fails, cleanup and exit
+                while (--i >= 0) {
+                    if (np->ofile[i]) {
+                        fileclose(np->ofile[i]);
+                    }
+                }
+                freeproc(np);
+                release(&np->lock);
+                return -1;
+            }
+        }
+    }
+
+    // Duplicate the current working directory.
+    if ((np->cwd = idup(p->cwd)) == 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+
+    // Copy process name
+    safestrcpy(np->name, p->name, sizeof(p->name));
+
+    // Assign pid and set process to runnable
+    pid = np->pid;
+
     release(&np->lock);
-    return -1;
-  }
-  np->sz = p->sz;
-  // copy trace mask value
-  np->trace_mask = p->trace_mask;
-  // copy saved user registers.
-  *(np->trapframe) = *(p->trapframe);
 
-  // Cause fork to return 0 in the child.
-  np->trapframe->a0 = 0;
+    // Set parent process and update wait_lock
+    acquire(&wait_lock);
+    np->parent = p;
+    release(&wait_lock);
 
-  // increment reference counts on open file descriptors.
-  for(i = 0; i < NOFILE; i++)
-    if(p->ofile[i])
-      np->ofile[i] = filedup(p->ofile[i]);
-  np->cwd = idup(p->cwd);
+    // Finally, set the child process to runnable
+    acquire(&np->lock);
+    np->state = RUNNABLE;
+    release(&np->lock);
 
-  safestrcpy(np->name, p->name, sizeof(p->name));
-
-  pid = np->pid;
-
-  release(&np->lock);
-
-  acquire(&wait_lock);
-  np->parent = p;
-  release(&wait_lock);
-
-  acquire(&np->lock);
-  np->state = RUNNABLE;
-  release(&np->lock);
-
-  return pid;
+    return pid;
 }
 ```
 
+#### 测试结果
+
+<img src="img/test-trace.png" alt="test-trace" style="zoom:67%;" />
+
+<img src="img/test-trace-2.png" alt="test-trace-2" style="zoom:67%;" />
+
+<img src="img/test-trace-3.png" alt="test-trace-3" style="zoom:67%;" />
+
+### 
