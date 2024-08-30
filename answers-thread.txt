@@ -1,0 +1,10 @@
+Q1: Why are there missing keys with 2 threads, but not with 1 thread? Identify a sequence of events with 2 threads that can lead to a key being missing. Submit your sequence with a short explanation in `answers-thread.txt`.
+
+在两个线程同时执行 put() 操作时，由于缺乏同步保护，可能会导致键丢失。具体的竞态条件如下：
+
+1. Thread 1 和 Thread 2 同时检查相同的哈希桶（table[i]），发现没有该键存在。
+2. Thread 1 和 Thread 2 准备插入不同的键，并且几乎同时调用 insert() 函数。
+3. Thread 2 完成插入，并更新 table[i]。
+4. Thread 1 随后完成插入，但覆盖了 Thread 2 的修改，导致键丢失。
+
+这种情况在单线程环境中不会发生，因为只有一个线程会修改哈希桶。
