@@ -339,7 +339,11 @@ binit(void)
 
 #### 测试成功
 
-
+![bcachetest](img/bcachetest.png)
 
 ### 实验得分
+
+
+
+
 
