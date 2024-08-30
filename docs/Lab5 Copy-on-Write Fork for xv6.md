@@ -365,3 +365,4 @@ int checkcowpage(uint64 va, pte_t *pte, struct proc* p) {
 
 #### 测试成功
 
+<img src="img/cowtest.png" alt="cowtest" style="zoom:67%;" />
