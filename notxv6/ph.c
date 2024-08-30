@@ -17,6 +17,8 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_mutex_t lock[NBUCKET]; // lock for puts
+
 
 double
 now()
@@ -51,8 +53,11 @@ void put(int key, int value)
     // update the existing key.
     e->value = value;
   } else {
+  pthread_mutex_lock(&lock[i]);
     // the new is new.
+    // 重要的是 table[i] 的值，如果 thread_1 刚进入，但是 thread_2 刚好完成修改了 table[i] 的操作，此时就会丢失后面的所有node
     insert(key, value, &table[i], table[i]);
+  pthread_mutex_unlock(&lock[i]);
   }
 
 }
