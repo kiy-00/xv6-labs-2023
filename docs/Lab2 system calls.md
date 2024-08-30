@@ -1429,6 +1429,10 @@ procdump(void)
 
 ### Using gdb(easy)
 
+#### 任务
+
+* 学习如何使用 GDB 进行调试本 xv6。
+
 #### 步骤
 
 * 在终端输入：`make qemu-gdb`。然后再打开一个终端，运行 `gdb-multiarch -x .gdbinit`。这将运行 `.gdbinit` 中的命令，也就是开启远程调试功能，并设置`arch`架构为 `riscv64`。
@@ -1567,3 +1571,223 @@ procdump(void)
 * 可以看到，这个`initcode` 的 pid 为 1。
 * ==Q6: What is the name of the binary that was running when the kernel paniced? What is its process id (`pid`)?==
 * A: 这个二进制的名字为 `initcode` ，其 process id 为 1。
+
+### System call tracing (moderate)
+
+#### 任务
+
+* 此任务会增加一个系统调用追踪功能，它将会在后续实验的调试时有所帮助。课程提供了一个 `trace` 程序，它将会运行并开始另一个程序的系统调用追踪功能（tracing enable），此程序位于 `user/trace.c`。其参数为一个掩码 mask ，用来指示其要追踪的系统调用。例如 `trace(1 << SYS_fork)`，`SYS_fork` 为系统调用号在文件 `kernel/syscall.h` 中。如果系统调用号被设置在掩码中，你必须修改 xv6 内核，当每一个追踪的系统调用将要返回的时候打印一行信息。这一行信息包含进程 id，系统调用的名字和要返回的值。你不需要打印系统调用的参数。`trace` 系统调用应该启用它调用的程序和它调用程序的每一个子程序的追踪功能，但是不能影响其他进程。
+
+#### 添加到`Makefile`
+
+* 将 `$U/_trace` 添加到 Makefile 的 UPROGS 中。
+
+#### 添加`trace`系统调用的定义
+
+* 在 `user/user.h` 中添加这个系统调用的函数原型；<img src="img/add-trace-in-user.h.png" alt="add-trace-in-user.h" style="zoom:67%;" />
+
+* 在 `user/usys.pl` 中添加一个 `entry` ，它将会生成 `user/usys.S` ，里面包含真实的汇编代码，它使用 Risc V 的 `ecall` 指令陷入内核，执行系统调用；
+
+  <img src="img/add-trace-in usys.pl.png" alt="add-trace-in usys.pl" style="zoom:67%;" />
+
+* 在 `kernel/syscall.h` 中添加一个系统调用号；
+
+<img src="img/add-trace-in-syscall.h.png" alt="add-trace-in-syscall.h" style="zoom: 67%;" />
+
+#### 添加`sys_trace()`
+
+* 在 `kernel/sysproc.c` 中添加一个 `sys_trace()` 函数作为系统调用。
+
+  ```c
+  //add trace
+  
+  uint64
+  sys_trace()
+  {
+    int mask;
+  
+    argint(0, &mask);
+  
+    struct proc *pro = myproc();
+    printf("trace pid: %d\n", pro->pid);
+    pro->trace_mask = mask;
+  
+    return 0;
+  } 
+  ```
+
+  
+
+#### 修改`struct proc`
+
+* 添加`trace_mask`变量
+
+```c
+// these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+  int trace_mask;              // trace syscall mas
+```
+
+
+
+#### 修改`syscall.c`
+
+```c
+extern uint64 sys_trace(void);
+
+// An array mapping syscall numbers from syscall.h
+// to the function that handles the system call.
+static char *syscall_name[] = {
+        "", "fork", "exit", "wait", "pipe", "read", "kill", "exec", "fstat", "chdir", "dup",
+        "getpid", "sbrk", "sleep", "uptime", "open", "write", "mknod", "unlink", "link", "mkdir",
+        "close", "trace"
+};
+
+void
+syscall(void)
+{
+  int num;
+  struct proc *p = myproc();
+
+  num = p->trapframe->a7;
+  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    p->trapframe->a0 = syscalls[num]();
+
+    if (p->trace_mask & (1 << num)) {
+      printf("%d: syscall %s -> %d\n", p->pid, syscall_name[num], p->trapframe->a0);
+    }
+  } else {
+    printf("%d %s: unknown sys call %d\n",
+            p->pid, p->name, num);
+    p->trapframe->a0 = -1;
+  }
+}
+```
+
+#### 清除掩码
+
+* 进程清除时也应清除相应掩码 `proc.c/freeproc`：
+
+```c
+// free a proc structure and the data hanging from it,
+// including user pages.
+// p->lock must be held.
+static void
+freeproc(struct proc *p)
+{
+  if(p->trapframe)
+    kfree((void*)p->trapframe);
+  p->trapframe = 0;
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);
+  p->pagetable = 0;
+  p->sz = 0;
+  p->pid = 0;
+  p->parent = 0;
+  p->name[0] = 0;
+  p->chan = 0;
+  p->killed = 0;
+  p->xstate = 0;
+  p->state = UNUSED;
+  
+  // trace
+  p->trace_mask = 0;
+}
+```
+
+#### 修改fork
+
+* fork时子进程也复制到该掩码 `proc.c/fork`：
+
+```c
+// Create a new process, copying the parent.
+// Sets up child kernel stack to return as if from fork() system call.
+int fork(void) {
+    int i, pid;
+    struct proc *np;
+    struct proc *p = myproc();
+
+    // Allocate process.
+    if ((np = allocproc()) == 0) {
+        return -1;
+    }
+
+    // Copy user memory from parent to child.
+    if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+    np->sz = p->sz;
+
+    // Copy trace mask value
+    np->trace_mask = p->trace_mask;
+
+    // Copy saved user registers.
+    *(np->trapframe) = *(p->trapframe);
+
+    // Cause fork to return 0 in the child.
+    np->trapframe->a0 = 0;
+
+    // Increment reference counts on open file descriptors.
+    for (i = 0; i < NOFILE; i++) {
+        if (p->ofile[i]) {
+            if ((np->ofile[i] = filedup(p->ofile[i])) == 0) {
+                // If filedup fails, cleanup and exit
+                while (--i >= 0) {
+                    if (np->ofile[i]) {
+                        fileclose(np->ofile[i]);
+                    }
+                }
+                freeproc(np);
+                release(&np->lock);
+                return -1;
+            }
+        }
+    }
+
+    // Duplicate the current working directory.
+    if ((np->cwd = idup(p->cwd)) == 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+
+    // Copy process name
+    safestrcpy(np->name, p->name, sizeof(p->name));
+
+    // Assign pid and set process to runnable
+    pid = np->pid;
+
+    release(&np->lock);
+
+    // Set parent process and update wait_lock
+    acquire(&wait_lock);
+    np->parent = p;
+    release(&wait_lock);
+
+    // Finally, set the child process to runnable
+    acquire(&np->lock);
+    np->state = RUNNABLE;
+    release(&np->lock);
+
+    return pid;
+}
+```
+
+#### 测试结果
+
+<img src="img/test-trace.png" alt="test-trace" style="zoom:67%;" />
+
+<img src="img/test-trace-2.png" alt="test-trace-2" style="zoom:67%;" />
+
+<img src="img/test-trace-3.png" alt="test-trace-3" style="zoom:67%;" />
+
+### 
