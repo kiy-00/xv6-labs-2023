@@ -120,6 +120,477 @@ struct usyscall {
 - 在进程创建时，将一个只读页面映射到 `USYSCALL` 虚拟地址，并初始化 `struct usyscall` 以存储当前进程的 PID。
 - 测试 `ugetpid()` 是否能够正确使用该共享页面并通过测试用例。
 
+#### `kernel/vm.c`
+
+##### 代码中文注释及原理分析
+
+```c
+#include "param.h"
+#include "types.h"
+#include "memlayout.h"
+#include "elf.h"
+#include "riscv.h"
+#include "defs.h"
+#include "fs.h"
+
+/*
+ * 内核页表的定义。
+ */
+pagetable_t kernel_pagetable;
+
+extern char etext[];  // 由 kernel.ld 设置，表示内核代码的结束地址。
+
+extern char trampoline[]; // 定义在 trampoline.S 中的跳板页
+
+// 创建一个内核的直接映射页表。
+pagetable_t
+kvmmake(void)
+{
+  pagetable_t kpgtbl;
+
+  // 分配一页内存来存放页表
+  kpgtbl = (pagetable_t) kalloc();
+  memset(kpgtbl, 0, PGSIZE);
+
+  // 映射 UART 寄存器
+  kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // 映射 virtio mmio 虚拟磁盘接口
+  kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // 映射 PLIC (平台级中断控制器)
+  kvmmap(kpgtbl, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // 映射内核代码段，可执行且只读。
+  kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // 映射内核数据段和物理 RAM
+  kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // 映射用于陷阱进入/退出的跳板页到内核的最高虚拟地址。
+  kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  // 为每个进程分配并映射一个内核栈。
+  proc_mapstacks(kpgtbl);
+  
+  return kpgtbl;
+}
+
+// 初始化唯一的 kernel_pagetable
+void
+kvminit(void)
+{
+  kernel_pagetable = kvmmake();
+}
+
+// 切换硬件页表寄存器到内核的页表，并启用分页。
+void
+kvminithart()
+{
+  // 等待所有对页表内存的写入操作完成。
+  sfence_vma();
+
+  // 设置页表地址寄存器 satp
+  w_satp(MAKE_SATP(kernel_pagetable));
+
+  // 刷新 TLB 中的陈旧条目。
+  sfence_vma();
+}
+
+// 返回页表 pagetable 中对应于虚拟地址 va 的 PTE 的地址。
+// 如果 alloc!=0，创建所需的页表页。
+// RISC-V 的 Sv39 方案有三级页表。
+// 页表页包含 512 个 64 位 PTE。
+// 64 位虚拟地址被分成五个字段：
+//   39..63 -- 必须为零。
+//   30..38 -- 9 位的二级页表索引。
+//   21..29 -- 9 位的一级页表索引。
+//   12..20 -- 9 位的零级页表索引。
+//    0..11 -- 页内的字节偏移量。
+pte_t *
+walk(pagetable_t pagetable, uint64 va, int alloc)
+{
+  if(va >= MAXVA)
+    panic("walk");
+
+  for(int level = 2; level > 0; level--) {
+    pte_t *pte = &pagetable[PX(level, va)];
+    if(*pte & PTE_V) {
+      pagetable = (pagetable_t)PTE2PA(*pte);
+    } else {
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+        return 0;
+      memset(pagetable, 0, PGSIZE);
+      *pte = PA2PTE(pagetable) | PTE_V;
+    }
+  }
+  return &pagetable[PX(0, va)];
+}
+
+// 查找虚拟地址 va，对应的物理地址，如果没有映射则返回 0。
+// 仅用于查找用户页面。
+uint64
+walkaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  return pa;
+}
+
+// 添加映射到内核页表。
+// 仅在启动时使用。
+// 不刷新 TLB 或启用分页。
+void
+kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpgtbl, va, sz, pa, perm) != 0)
+    panic("kvmmap");
+}
+
+// 为从 va 开始的虚拟地址创建指向物理地址 pa 的 PTE。
+// va 和 size 必须是页面对齐的。
+// 成功返回 0，如果 walk() 无法分配所需的页表页则返回 -1。
+int
+mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("mappages: va not aligned");
+
+  if((size % PGSIZE) != 0)
+    panic("mappages: size not aligned");
+
+  if(size == 0)
+    panic("mappages: size");
+  
+  a = va;
+  last = va + size - PGSIZE;
+  for(;;){
+    if((pte = walk(pagetable, a, 1)) == 0)
+      return -1;
+    if(*pte & PTE_V)
+      panic("mappages: remap");
+    *pte = PA2PTE(pa) | perm | PTE_V;
+    if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
+  }
+  return 0;
+}
+
+// 移除从 va 开始的 npages 页的映射。va 必须是页面对齐的。
+// 这些映射必须存在。
+// 可选地释放物理内存。
+void
+uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("uvmunmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvmunmap: walk");
+    if((*pte & PTE_V) == 0)
+      panic("uvmunmap: not mapped");
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not a leaf");
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    *pte = 0;
+  }
+}
+
+// 创建一个空的用户页表。
+// 如果内存不足则返回 0。
+pagetable_t
+uvmcreate()
+{
+  pagetable_t pagetable;
+  pagetable = (pagetable_t) kalloc();
+  if(pagetable == 0)
+    return 0;
+  memset(pagetable, 0, PGSIZE);
+  return pagetable;
+}
+
+// 将用户 initcode 加载到 pagetable 的地址 0 处，
+// 这是第一个进程。
+// sz 必须小于一页。
+void
+uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
+{
+  char *mem;
+
+  if(sz >= PGSIZE)
+    panic("uvmfirst: more than a page");
+  mem = kalloc();
+  memset(mem, 0, PGSIZE);
+  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+  memmove(mem, src, sz);
+}
+
+// 分配 PTE 和物理内存以将进程从 oldsz 增长到 newsz，
+// 不需要页面对齐。成功返回新大小，错误返回 0。
+uint64
+uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
+{
+  char *mem;
+  uint64 a;
+
+  if(newsz < oldsz)
+    return oldsz;
+
+  oldsz = PGROUNDUP(oldsz);
+  for(a = oldsz; a < newsz; a += PGSIZE){
+    mem = kalloc();
+    if(mem == 0){
+      uvmdealloc(pagetable, a
+
+, oldsz);
+      return 0;
+    }
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      kfree(mem);
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+  }
+  return newsz;
+}
+
+// 释放用户页以将进程大小从 oldsz 减小到 newsz。
+// oldsz 和 newsz 不需要页面对齐，newsz 也不需要小于 oldsz。
+// oldsz 可以大于实际的进程大小。返回新进程大小。
+uint64
+uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  if(newsz >= oldsz)
+    return oldsz;
+
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
+  }
+
+  return newsz;
+}
+
+// 递归地释放页表页。
+// 所有叶子映射必须已经被移除。
+void
+freewalk(pagetable_t pagetable)
+{
+  // 一个页表中有 2^9 = 512 个 PTE。
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // 这个 PTE 指向一个下级页表。
+      uint64 child = PTE2PA(pte);
+      freewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    } else if(pte & PTE_V){
+      panic("freewalk: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+// 释放用户内存页，然后释放页表页。
+void
+uvmfree(pagetable_t pagetable, uint64 sz)
+{
+  if(sz > 0)
+    uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);
+  freewalk(pagetable);
+}
+
+// 根据父进程的页表，将其内存复制到子进程的页表中。
+// 复制页表和物理内存。
+// 成功返回 0，失败返回 -1。
+// 在失败时释放所有分配的页。
+int
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    if((mem = kalloc()) == 0)
+      goto err;
+    memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      goto err;
+    }
+  }
+  return 0;
+
+ err:
+  uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
+// 将 PTE 标记为无效的用户访问。
+// 由 exec 用于用户栈保护页。
+void
+uvmclear(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    panic("uvmclear");
+  *pte &= ~PTE_U;
+}
+
+// 从内核复制到用户。
+// 从 src 复制 len 字节到指定页表中的虚拟地址 dstva。
+// 成功返回 0，错误返回 -1。
+int
+copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+{
+  uint64 n, va0, pa0;
+  pte_t *pte;
+
+  while(len > 0){
+    va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)
+      return -1;
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
+       (*pte & PTE_W) == 0)
+      return -1;
+    pa0 = PTE2PA(*pte);
+    n = PGSIZE - (dstva - va0);
+    if(n > len)
+      n = len;
+    memmove((void *)(pa0 + (dstva - va0)), src, n);
+
+    len -= n;
+    src += n;
+    dstva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+// 从用户复制到内核。
+// 从指定页表中的虚拟地址 srcva 复制 len 字节到 dst。
+// 成功返回 0，错误返回 -1。
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+  uint64 n, va0, pa0;
+
+  while(len > 0){
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0)
+      return -1;
+    n = PGSIZE - (srcva - va0);
+    if(n > len)
+      n = len;
+    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+
+    len -= n;
+    dst += n;
+    srcva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+// 从用户到内核复制一个以 '\0' 结尾的字符串。
+// 从指定页表中的虚拟地址 srcva 开始复制字节到 dst，
+// 直到 '\0' 或达到 max 字节。
+// 成功返回 0，错误返回 -1。
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  uint64 n, va0, pa0;
+  int got_null = 0;
+
+  while(got_null == 0 && max > 0){
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0)
+      return -1;
+    n = PGSIZE - (srcva - va0);
+    if(n > max)
+      n = max;
+
+    char *p = (char *) (pa0 + (srcva - va0));
+    while(n > 0){
+      if(*p == '\0'){
+        *dst = '\0';
+        got_null = 1;
+        break;
+      } else {
+        *dst = *p;
+      }
+      --n;
+      --max;
+      p++;
+      dst++;
+    }
+
+    srcva = va0 + PGSIZE;
+  }
+  if(got_null){
+    return 0;
+  } else {
+    return -1;
+  }
+}
+```
+
+##### 原理分析
+
+- **kvmmake()**：函数创建内核的页表，映射了常用的设备如 UART、virtio 虚拟磁盘接口和 PLIC，同时映射内核代码段、数据段、跳板页以及每个进程的内核栈。
+
+- **kvminit() 和 kvminithart()**：初始化并激活内核页表，设置 `satp` 寄存器，并清除过期的 TLB 条目。
+
+- **walk()**：遍历页表，找到虚拟地址 `va` 对应的页表条目 `PTE`。如果需要，函数会递归地分配页表页。
+
+- **kvmmap() 和 mappages()**：负责将虚拟地址映射到物理地址的页表条目创建。`kvmmap` 仅用于启动时初始化内核页表，而 `mappages` 是通用的映射函数。
+
+- **uvmcreate() 和 uvmfirst()**：创建用户进程的页表并将初始代码加载到虚拟地址 0。
+
+- **uvmalloc() 和 uvmdealloc()**：用于分配和释放用户进程的虚拟内存。
+
+- **copyout() 和 copyin()**：在内核和用户进程间复制数据。
+
+- **copyinstr()**：复制以 `\0` 结尾的字符串，从用户空间到内核空间。
+
+这些代码主要是管理页表和内存映射，确保内核和用户进程能够正确访问内存区域。通过页表和虚拟内存，操作系统能够为不同的进程提供隔离的内存空间，并且在物理内存不足时，能够灵活管理和分配内存资源。
+
 ## 实验内容
 
 ### Speed up system calls(easy)
@@ -350,3 +821,80 @@ if(p->pid==1) vmprint(p->pagetable);
 
 #### 测试成功
 
+<img src="img/test-2.png" alt="test-2" style="zoom:67%;" />
+
+### Detect which pages have been accessed (hard)
+
+#### 任务
+
+* 本实验要求你在 xv6 中实现一个新的系统调用 `pgaccess()`，该调用可以检测并报告哪些页面已经被访问（读或写）。RISC-V 的硬件页面遍历器会在解决 TLB 缺失时在 PTE 中标记这些位。你需要实现 `pgaccess()` 系统调用，它将报告哪些页面被访问。系统调用接收三个参数。首先，它接收要检查的第一个用户页面的起始虚拟地址。其次，它接收要检查的页面数量。最后，它接收一个用户地址，用于存储结果到位掩码（bitmask）中（位掩码是一种数据结构，每个页面使用一个位，其中第一个页面对应最低有效位）。当你运行 `pgtbltest` 并且 `pgaccess` 测试通过时，你将获得本部分实验的全部分数。
+
+#### 实现`sys_pgacess()`
+
+* 实现一个系统调用 `sys_pgaccess()` 在文件 `kernel/sysproc.c` 中：
+
+```c
+int sys_pgaccess(void)
+{
+  uint64 va;             // 定义变量 `va`，用于存储虚拟地址
+  int pagenum;           // 定义变量 `pagenum`，用于存储要检查的页面数量
+  uint64 abitsaddr;      // 定义变量 `abitsaddr`，用于存储用户空间中位掩码的地址
+
+  // 从用户空间中获取系统调用的三个参数
+  argaddr(0, &va);       // 获取第一个参数（起始虚拟地址）并存储在 `va` 中
+  argint(1, &pagenum);   // 获取第二个参数（页面数量）并存储在 `pagenum` 中
+  argaddr(2, &abitsaddr);// 获取第三个参数（位掩码的地址）并存储在 `abitsaddr` 中
+
+  uint64 maskbits = 0;   // 初始化 `maskbits`，用于存储页面访问情况的位掩码
+  struct proc *proc = myproc(); // 获取当前进程的指针
+
+  // 遍历每一个需要检查的页面
+  for (int i = 0; i < pagenum; i++) {
+    // 通过 `walk` 函数获取虚拟地址 `va + i * PGSIZE` 对应的页表条目（PTE）
+    pte_t *pte = walk(proc->pagetable, va + i * PGSIZE, 0);
+
+    // 如果页表条目不存在，则触发 panic，说明页不存在
+    if (pte == 0)
+      panic("page not exist.");
+
+    // 检查页表条目中的访问位（PTE_A）是否被设置
+    if (PTE_FLAGS(*pte) & PTE_A) {
+      // 如果访问位被设置，将对应的位在 `maskbits` 中置 1
+      maskbits = maskbits | (1L << i);
+    }
+
+    // 清除 PTE_A 访问位，将访问位置为 0
+    *pte = ((*pte & PTE_A) ^ *pte) ^ 0;
+  }
+
+  // 将 `maskbits` 拷贝到用户空间指定的地址 `abitsaddr` 中
+  if (copyout(proc->pagetable, abitsaddr, (char *)&maskbits, sizeof(maskbits)) < 0)
+    panic("sys_pgacess copyout error"); // 如果拷贝失败，触发 panic
+
+  return 0; // 返回 0 表示成功
+}
+```
+
+##### 原理解释
+
+`sys_pgaccess()` 是一个系统调用，用于检测和报告指定页面是否被访问过。它通过检查 RISC-V 页表中的访问位（PTE_A）来确定某些页面是否被访问过。
+
+1. **参数解析**：
+   - `va`：要检查的起始虚拟地址。
+   - `pagenum`：要检查的页面数量。
+   - `abitsaddr`：用于存储结果位掩码的用户地址。
+2. **遍历页面**： 通过 `walk()` 函数获取每个页面的页表条目（PTE）。如果页表条目存在且访问位被设置，则在 `maskbits` 中相应的位置 1。`maskbits` 是一个位掩码，记录了每个页面是否被访问过。
+3. **清除访问位**： 在确认某个页面的访问位（PTE_A）被设置后，系统会将其清除，以便能够在将来的调用中重新检测页面的访问情况。
+4. **将结果拷贝到用户空间**： 将 `maskbits` 的值拷贝到用户空间指定的地址 `abitsaddr`，以便用户程序可以读取该结果。
+
+通过这一过程，`sys_pgaccess()` 实现了检查并报告页面访问状态的功能，非常适用于需要检测内存访问行为的场景，例如垃圾收集器的实现。
+
+#### 定义`PTE_A`
+
+* 需要在 `kernel/riscv.h` 中定义一个 `PTE_A`，其为 `Risc V` 定义的 access bit：
+
+```c
+#define PTE_A (1L << 6)
+```
+
+### 实验得分
