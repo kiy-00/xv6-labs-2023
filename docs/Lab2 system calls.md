@@ -1584,7 +1584,179 @@ procdump(void)
 
 #### 添加`trace`系统调用的定义
 
-* 在 `user/user.h` 中添加这个系统调用的函数原型；
+* 在 `user/user.h` 中添加这个系统调用的函数原型；<img src="img/add-trace-in-user.h.png" alt="add-trace-in-user.h" style="zoom:67%;" />
+
 * 在 `user/usys.pl` 中添加一个 `entry` ，它将会生成 `user/usys.S` ，里面包含真实的汇编代码，它使用 Risc V 的 `ecall` 指令陷入内核，执行系统调用；
-* 在 `kernel/syscal.h` 中添加一个系统调用号；
+
+  <img src="img/add-trace-in usys.pl.png" alt="add-trace-in usys.pl" style="zoom:67%;" />
+
+* 在 `kernel/syscall.h` 中添加一个系统调用号；
+
+<img src="img/add-trace-in-syscall.h.png" alt="add-trace-in-syscall.h" style="zoom: 67%;" />
+
+#### 添加`sys_trace()`
+
+* 在 `kernel/sysproc.c` 中添加一个 `sys_trace()` 函数作为系统调用。
+
+  ```c
+  //add trace
+  
+  uint64
+  sys_trace()
+  {
+    int mask;
+  
+    argint(0, &mask);
+  
+    struct proc *pro = myproc();
+    printf("trace pid: %d\n", pro->pid);
+    pro->trace_mask = mask;
+  
+    return 0;
+  } 
+  ```
+
+  
+
+#### 修改`struct proc`
+
+* 添加`trace_mask`变量
+
+```c
+// these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+  int trace_mask;              // trace syscall mas
+```
+
+
+
+#### 修改`syscall.c`
+
+```c
+extern uint64 sys_trace(void);
+
+// An array mapping syscall numbers from syscall.h
+// to the function that handles the system call.
+static char *syscall_name[] = {
+        "", "fork", "exit", "wait", "pipe", "read", "kill", "exec", "fstat", "chdir", "dup",
+        "getpid", "sbrk", "sleep", "uptime", "open", "write", "mknod", "unlink", "link", "mkdir",
+        "close", "trace"
+};
+
+void
+syscall(void)
+{
+  int num;
+  struct proc *p = myproc();
+
+  num = p->trapframe->a7;
+  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    p->trapframe->a0 = syscalls[num]();
+
+    if (p->trace_mask & (1 << num)) {
+      printf("%d: syscall %s -> %d\n", p->pid, syscall_name[num], p->trapframe->a0);
+    }
+  } else {
+    printf("%d %s: unknown sys call %d\n",
+            p->pid, p->name, num);
+    p->trapframe->a0 = -1;
+  }
+}
+```
+
+#### 清除掩码
+
+* 进程清除时也应清除相应掩码 `proc.c/freeproc`：
+
+```c
+// free a proc structure and the data hanging from it,
+// including user pages.
+// p->lock must be held.
+static void
+freeproc(struct proc *p)
+{
+  if(p->trapframe)
+    kfree((void*)p->trapframe);
+  p->trapframe = 0;
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);
+  p->pagetable = 0;
+  p->sz = 0;
+  p->pid = 0;
+  p->parent = 0;
+  p->name[0] = 0;
+  p->chan = 0;
+  p->killed = 0;
+  p->xstate = 0;
+  p->state = UNUSED;
+  
+  // trace
+  p->trace_mask = 0;
+}
+```
+
+#### 修改fork
+
+* fork时子进程也复制到该掩码 `proc.c/fork`：
+
+```c
+// Create a new process, copying the parent.
+// Sets up child kernel stack to return as if from fork() system call.
+int
+fork(void)
+{
+  int i, pid;
+  struct proc *np;
+  struct proc *p = myproc();
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // Copy user memory from parent to child.
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  np->sz = p->sz;
+  // copy trace mask value
+  np->trace_mask = p->trace_mask;
+  // copy saved user registers.
+  *(np->trapframe) = *(p->trapframe);
+
+  // Cause fork to return 0 in the child.
+  np->trapframe->a0 = 0;
+
+  // increment reference counts on open file descriptors.
+  for(i = 0; i < NOFILE; i++)
+    if(p->ofile[i])
+      np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+
+  safestrcpy(np->name, p->name, sizeof(p->name));
+
+  pid = np->pid;
+
+  release(&np->lock);
+
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = RUNNABLE;
+  release(&np->lock);
+
+  return pid;
+}
+```
 
