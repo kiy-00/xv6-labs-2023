@@ -1,4 +1,4 @@
-# Lab6 networking
+# Lab7 networking
 
 [TOC]
 
