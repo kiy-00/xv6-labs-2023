@@ -226,3 +226,127 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz) {
 }
 ```
 
+#### 测试成功
+
+<img src="img/test-1.png" alt="test-1" style="zoom:67%;" />
+
+### Print a page table (easy)
+
+#### 任务
+
+* 第二个任务是写一个函数来打印页表的内容。这个函数定义为 `vmprint()` 。它应该接收一个 `pagetable_t` 类型的参数，并且按照下面的格式打印。在 `exec.c` 中的 `return argc` 之前插入 `if(p->pid==1) vmprint(p->pagetable)` ，用来打印第一个进程的页表。
+
+  当你做完这些之后，运行 `qemu` 之后应该看到一下输出，它在第一个进程 `init` 完成之前打印出来。
+
+```bash
+page table 0x0000000087f6b000
+ ..0: pte 0x0000000021fd9c01 pa 0x0000000087f67000
+ .. ..0: pte 0x0000000021fd9801 pa 0x0000000087f66000
+ .. .. ..0: pte 0x0000000021fda01b pa 0x0000000087f68000
+ .. .. ..1: pte 0x0000000021fd9417 pa 0x0000000087f65000
+ .. .. ..2: pte 0x0000000021fd9007 pa 0x0000000087f64000
+ .. .. ..3: pte 0x0000000021fd8c17 pa 0x0000000087f63000
+ ..255: pte 0x0000000021fda801 pa 0x0000000087f6a000
+ .. ..511: pte 0x0000000021fda401 pa 0x0000000087f69000
+ .. .. ..509: pte 0x0000000021fdcc13 pa 0x0000000087f73000
+ .. .. ..510: pte 0x0000000021fdd007 pa 0x0000000087f74000
+ .. .. ..511: pte 0x0000000020001c0b pa 0x0000000080007000
+init: starting sh
+```
+
+#### 在`kernel/vm.c`中实现`vmprint()`
+
+##### 参考`freewalk()`的实现
+
+```c
+// Recursively free page-table pages.
+// All leaf mappings must already have been removed.
+void
+freewalk(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    } else if(pte & PTE_V){
+      panic("freewalk: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+```
+
+
+
+* 我们此次的 `vmprint` 函数也可以效仿此递归方法，但是需要展示此页表的深度，这时我们可以另外设置一个静态变量来指示当前打印页的深度信息，如果需要进入下一级页表就将其加一，函数返回就减一。具体实现如下：
+
+```c
+static int printdeep = 0;
+
+void
+vmprint(pagetable_t pagetable)
+{
+  if (printdeep == 0)
+    printf("page table %p\n", (uint64)pagetable);
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      for (int j = 0; j <= printdeep; j++) {
+        printf("..");
+      }
+      printf("%d: pte %p pa %p\n", i, (uint64)pte, (uint64)PTE2PA(pte));
+    }
+    // pintes to lower-level page table
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      printdeep++;
+      uint64 child_pa = PTE2PA(pte);
+      vmprint((pagetable_t)child_pa);
+      printdeep--;
+    }
+  }
+}
+```
+
+#### 添加`vmprint()`的声明
+
+* 将函数 `vmprint` 的声明放到 `kernel/defs.h` 中，以便可以在 `exec.c` 中调用它。
+
+```c
+// vm.c
+void            kvminit(void);
+void            kvminithart(void);
+void            kvmmap(pagetable_t, uint64, uint64, uint64, int);
+int             mappages(pagetable_t, uint64, uint64, uint64, int);
+pagetable_t     uvmcreate(void);
+void            uvmfirst(pagetable_t, uchar *, uint);
+uint64          uvmalloc(pagetable_t, uint64, uint64, int);
+uint64          uvmdealloc(pagetable_t, uint64, uint64);
+int             uvmcopy(pagetable_t, pagetable_t, uint64);
+void            uvmfree(pagetable_t, uint64);
+void            uvmunmap(pagetable_t, uint64, uint64, int);
+void            uvmclear(pagetable_t, uint64);
+pte_t *         walk(pagetable_t, uint64, int);
+uint64          walkaddr(pagetable_t, uint64);
+int             copyout(pagetable_t, uint64, char *, uint64);
+int             copyin(pagetable_t, char *, uint64, uint64);
+int             copyinstr(pagetable_t, char *, uint64, uint64);
+//here
+void            vmprint(pagetable_t);
+```
+
+#### 修改`kernel/exec.c`
+
+* 在 `exec.c` 中的 `return argc` 之前插入 `if(p->pid==1) vmprint(p->pagetable)` ，用来打印第一个进程的页表。
+
+```c
+if(p->pid==1) vmprint(p->pagetable);
+
+  return argc; // this ends up in a0, the first argument to main(argc, argv)
+```
+
+#### 测试成功
+
