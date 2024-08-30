@@ -1790,4 +1790,181 @@ int fork(void) {
 
 <img src="img/test-trace-3.png" alt="test-trace-3" style="zoom:67%;" />
 
-### 
+### Sysinfo(moderate)
+
+#### 任务
+
+* 在本次实验中，你将添加一个 `sysinfo` 系统调用，用于收集当前运行系统的信息。该系统调用接受一个参数：指向 `struct sysinfo`（参见 `kernel/sysinfo.h`）的指针。内核应填写此结构体的字段：`freemem` 字段应设置为系统中空闲内存的字节数，`nproc` 字段应设置为状态不是 `UNUSED` 的进程数。我们提供了一个测试程序 `sysinfotest`；当该程序打印出 "sysinfotest: OK" 时，说明你已通过此实验。
+
+#### 添加到`Makefile`
+
+* **将 `$U/_sysinfotest` 添加到 `UPROGS` 中的 `Makefile`：**
+  - 打开 `Makefile`，找到 `UPROGS` 行，将 `user/sysinfotest.c` 对应的目标文件添加进去。
+
+
+
+#### 添加`sysinfo`系统调用的定义
+
+* 在 `user/user.h` 中添加这个系统调用的函数原型；
+
+* 在 `user/usys.pl` 中添加一个 `entry` ，它将会生成 `user/usys.S` ，里面包含真实的汇编代码，它使用 Risc V 的 `ecall` 指令陷入内核，执行系统调用；
+
+  ```perl
+  entry("fork");
+  entry("exit");
+  entry("wait");
+  entry("pipe");
+  entry("read");
+  entry("write");
+  entry("close");
+  entry("kill");
+  entry("exec");
+  entry("open");
+  entry("mknod");
+  entry("unlink");
+  entry("fstat");
+  entry("link");
+  entry("mkdir");
+  entry("chdir");
+  entry("dup");
+  entry("getpid");
+  entry("sbrk");
+  entry("sleep");
+  entry("uptime");
+  entry("trace");
+  entry("sysinfo");
+  ```
+
+  
+
+* 在 `kernel/syscall.h` 中添加一个系统调用号；
+
+  ```c
+  // System call numbers
+  #define SYS_fork    1
+  #define SYS_exit    2
+  #define SYS_wait    3
+  #define SYS_pipe    4
+  #define SYS_read    5
+  #define SYS_kill    6
+  #define SYS_exec    7
+  #define SYS_fstat   8
+  #define SYS_chdir   9
+  #define SYS_dup    10
+  #define SYS_getpid 11
+  #define SYS_sbrk   12
+  #define SYS_sleep  13
+  #define SYS_uptime 14
+  #define SYS_open   15
+  #define SYS_write  16
+  #define SYS_mknod  17
+  #define SYS_unlink 18
+  #define SYS_link   19
+  #define SYS_mkdir  20
+  #define SYS_close  21
+  #define SYS_trace  22
+  #define SYS_sysinfo 23
+  ```
+
+* 修改`kernel/syscall.c`
+
+```c
+extern uint64 sys_sysinfo(void);
+
+[SYS_sysinfo] sys_sysinfo,
+```
+
+
+
+#### 修改`kernel/kalloc.c`
+
+* 在 `kernel/kalloc.c` 中添加一个函数用于计算未使用的空闲内存。
+
+```c
+// 统计未使用内存
+// 一页等于 4096 bytes
+uint64
+free_mem_num(void)
+{
+
+  struct run *r;
+  uint64 free_num = 0;
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  while (r) {
+    free_num++;
+    r = r->next;
+  }
+  release(&kmem.lock);
+  return free_num * 4096;
+}
+```
+
+#### 修改`kernel/proc.c`
+
+* 在 `kernel/proc.c` 中添加一个函数用于收集进程数量。
+
+```c
+// used by sysinfo
+int
+proc_not_unsed_num(void)
+{
+  int nproc = 0;
+  for (struct proc *p = proc; p < &proc[NPROC]; p++) {
+    if (p->state != UNUSED)
+      nproc++;
+  }
+  return nproc;
+}
+```
+
+#### 将实现的两个函数的定义添加到`kernel/defs.h`中
+
+```c
+// used by sysinfo
+int             proc_not_unsed_num(void);
+```
+
+```c
+// used by sysinfo
+uint64          free_mem_num(void);
+```
+
+
+
+#### 在`kernel/sysproc.c`中实现`sysinfo`系统调用
+
+```c
+uint64
+sys_sysinfo(void)
+{
+  // user pointer to struct sysinfo
+  uint64 si_addr;
+
+  argaddr(0, &si_addr);
+  int nproc;
+  int freemem;
+
+  nproc = proc_not_unsed_num();
+  freemem = free_mem_num();
+
+  struct sysinfo sysinfo;
+  sysinfo.freemem = freemem;
+  sysinfo.nproc = nproc;
+
+  struct proc *p = myproc();
+  if (copyout(p->pagetable, si_addr, (char *)&sysinfo, sizeof(sysinfo)) < 0)
+    return -1;
+
+  return 0;
+}
+```
+
+* 注意在文件上方加上相关头文件：
+
+```c
+#include "sysinfo.h"
+```
+
+#### 测试结果
+
