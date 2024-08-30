@@ -591,6 +591,130 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 这些代码主要是管理页表和内存映射，确保内核和用户进程能够正确访问内存区域。通过页表和虚拟内存，操作系统能够为不同的进程提供隔离的内存空间，并且在物理内存不足时，能够灵活管理和分配内存资源。
 
+#### `kernel/kalloc.c`
+
+##### 代码详细注释与原理解释
+
+```c
+// 物理内存分配器，用于用户进程、内核栈、页表页和管道缓冲区的分配。
+// 该分配器每次分配整个4096字节的页面。
+
+#include "types.h"
+#include "param.h"
+#include "memlayout.h"
+#include "spinlock.h"
+#include "riscv.h"
+#include "defs.h"
+
+// 函数原型声明，用于释放一段物理内存区域。
+void freerange(void *pa_start, void *pa_end);
+
+// 外部变量声明，end 指向内核代码的结束地址（由链接脚本 kernel.ld 定义）。
+extern char end[]; // 内核代码后的第一个地址。
+
+// 定义一个结构体 run，用于链表中的节点，代表一个空闲的内存页。
+struct run {
+  struct run *next; // 指向下一个空闲页的指针
+};
+
+// 定义 kmem 结构体，用于管理物理内存的空闲链表，
+// 包含一个自旋锁 lock 用于同步访问，以及指向空闲链表的指针 freelist。
+struct {
+  struct spinlock lock; // 自旋锁，用于保护空闲链表的访问
+  struct run *freelist; // 指向空闲页链表的指针
+} kmem; // 定义了一个名为 kmem 的全局变量
+
+// 初始化内存分配器。
+void
+kinit()
+{
+  // 初始化自旋锁，名称为 "kmem"
+  initlock(&kmem.lock, "kmem");
+  // 释放从 end 地址开始到 PHYSTOP 的所有物理内存页面
+  freerange(end, (void*)PHYSTOP);
+}
+
+// 释放一段内存区域，将其分成多个页面并逐个释放。
+void
+freerange(void *pa_start, void *pa_end)
+{
+  char *p;
+  // 将起始地址向上取整到页面大小的倍数
+  p = (char*)PGROUNDUP((uint64)pa_start);
+  // 循环释放每一个4096字节的页面，直到到达结束地址
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+    kfree(p);
+}
+
+// 释放物理内存中 pa 指向的页面。
+// 这个页面通常是由 kalloc() 分配的。
+void
+kfree(void *pa)
+{
+  struct run *r;
+
+  // 检查释放的页面是否对齐、是否超出内存范围或位于内核结束地址之前
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // 用垃圾数据填充整个页面，以捕获悬空引用（dangling references）
+  memset(pa, 1, PGSIZE);
+
+  r = (struct run*)pa; // 将 pa 强制转换为 run 结构体指针
+
+  // 获取锁，防止并发访问
+  acquire(&kmem.lock);
+  // 将释放的页面加入空闲链表的表头
+  r->next = kmem.freelist;
+  kmem.freelist = r;
+  // 释放锁
+  release(&kmem.lock);
+}
+
+// 分配一个4096字节的物理内存页。
+// 返回内核可以使用的指针。如果内存不足，返回 0。
+void *
+kalloc(void)
+{
+  struct run *r;
+
+  // 获取锁，防止并发访问
+  acquire(&kmem.lock);
+  // 从空闲链表中取出一个页面
+  r = kmem.freelist;
+  if(r)
+    kmem.freelist = r->next; // 更新空闲链表的表头
+  release(&kmem.lock);
+
+  // 如果成功分配到页面，用垃圾数据填充
+  if(r)
+    memset((char*)r, 5, PGSIZE); // 填充页面以检测未初始化的使用
+  return (void*)r; // 返回分配的页面指针
+}
+```
+
+##### 原理解释
+
+1. **物理内存管理**：
+   - 这段代码实现了一个简单的物理内存分配器，用于分配和释放物理内存页面。每个页面大小为 4096 字节（即一个页面）。
+
+2. **空闲链表**：
+   - 空闲内存页面通过 `struct run` 结构体链接成一个链表。`kmem.freelist` 指向链表的头部，用于管理所有空闲的内存页面。
+
+3. **kinit 函数**：
+   - 在系统初始化时调用 `kinit()`，它首先初始化了自旋锁 `kmem.lock`，然后调用 `freerange()` 释放从内核代码结束地址 `end` 到物理内存结束地址 `PHYSTOP` 之间的内存，将这些页面加入空闲链表中。
+
+4. **freerange 函数**：
+   - `freerange()` 函数负责将指定范围内的物理内存页面逐一释放，并调用 `kfree()` 函数将它们加入空闲链表中。
+
+5. **kfree 函数**：
+   - `kfree()` 函数释放一个物理内存页面。它先检查页面是否有效，然后将页面清空，最后将其添加到空闲链表的表头。自旋锁 `kmem.lock` 用于保护链表的访问，防止多个进程同时操作导致链表损坏。
+
+6. **kalloc 函数**：
+   - `kalloc()` 函数从空闲链表中取出一个页面并返回它的指针。如果没有可用的页面，它返回 `0`。取出页面后，它用垃圾数据填充页面内容，以帮助检测未初始化的内存使用。
+
+这段代码的核心功能是提供物理内存页面的分配和释放机制，使用自旋锁确保线程安全，并且通过链表结构管理所有空闲页面。这是操作系统内存管理的基本组成部分。
+
 ## 实验内容
 
 ### Speed up system calls(easy)
@@ -833,61 +957,67 @@ if(p->pid==1) vmprint(p->pagetable);
 
 * 实现一个系统调用 `sys_pgaccess()` 在文件 `kernel/sysproc.c` 中：
 
+##### 代码注释
+
 ```c
-int sys_pgaccess(void)
+// 定义sys_pgaccess系统调用，用于检测哪些页面被访问过
+int
+sys_pgaccess(void)
 {
-  uint64 va;             // 定义变量 `va`，用于存储虚拟地址
-  int pagenum;           // 定义变量 `pagenum`，用于存储要检查的页面数量
-  uint64 abitsaddr;      // 定义变量 `abitsaddr`，用于存储用户空间中位掩码的地址
+  // 声明变量
+  uint64 vaddr;     // 用户虚拟地址
+  int num;          // 要检查的页面数
+  uint64 res_addr;  // 用于存储结果的用户空间地址
 
-  // 从用户空间中获取系统调用的三个参数
-  argaddr(0, &va);       // 获取第一个参数（起始虚拟地址）并存储在 `va` 中
-  argint(1, &pagenum);   // 获取第二个参数（页面数量）并存储在 `pagenum` 中
-  argaddr(2, &abitsaddr);// 获取第三个参数（位掩码的地址）并存储在 `abitsaddr` 中
+  // 从用户空间获取三个参数
+  argaddr(0, &vaddr);    // 获取第一个参数：虚拟地址
+  argint(1, &num);       // 获取第二个参数：页面数量
+  argaddr(2, &res_addr); // 获取第三个参数：结果存储地址
 
-  uint64 maskbits = 0;   // 初始化 `maskbits`，用于存储页面访问情况的位掩码
-  struct proc *proc = myproc(); // 获取当前进程的指针
+  struct proc *p = myproc();   // 获取当前进程指针
+  pagetable_t pagetable = p->pagetable;  // 获取当前进程的页表指针
+  uint64 res = 0;   // 初始化结果变量，表示哪些页面被访问过的位掩码
 
-  // 遍历每一个需要检查的页面
-  for (int i = 0; i < pagenum; i++) {
-    // 通过 `walk` 函数获取虚拟地址 `va + i * PGSIZE` 对应的页表条目（PTE）
-    pte_t *pte = walk(proc->pagetable, va + i * PGSIZE, 0);
+  // 遍历需要检查的页面
+  for(int i = 0; i < num; i++){
+    // 获取当前页面的页表项（PTE）
+    pte_t* pte = walk(pagetable, vaddr + PGSIZE * i, 1);
 
-    // 如果页表条目不存在，则触发 panic，说明页不存在
-    if (pte == 0)
-      panic("page not exist.");
-
-    // 检查页表条目中的访问位（PTE_A）是否被设置
-    if (PTE_FLAGS(*pte) & PTE_A) {
-      // 如果访问位被设置，将对应的位在 `maskbits` 中置 1
-      maskbits = maskbits | (1L << i);
+    // 检查PTE中的访问位PTE_A，如果被访问过
+    if(*pte & PTE_A){
+      *pte &= (~PTE_A);   // 清除访问位，表示已经记录了访问
+      res |= (1L << i);   // 设置结果位掩码中相应的位，表示这个页面被访问过
     }
-
-    // 清除 PTE_A 访问位，将访问位置为 0
-    *pte = ((*pte & PTE_A) ^ *pte) ^ 0;
   }
 
-  // 将 `maskbits` 拷贝到用户空间指定的地址 `abitsaddr` 中
-  if (copyout(proc->pagetable, abitsaddr, (char *)&maskbits, sizeof(maskbits)) < 0)
-    panic("sys_pgacess copyout error"); // 如果拷贝失败，触发 panic
+  // 将结果从内核空间拷贝到用户空间
+  copyout(pagetable, res_addr, (char*)&res, sizeof(uint64));
 
-  return 0; // 返回 0 表示成功
+  return 0;  // 返回0，表示系统调用成功
 }
 ```
 
-##### 原理解释
+##### 原理说明
 
-`sys_pgaccess()` 是一个系统调用，用于检测和报告指定页面是否被访问过。它通过检查 RISC-V 页表中的访问位（PTE_A）来确定某些页面是否被访问过。
+1. **系统调用参数获取**：
+   - `sys_pgaccess`从用户空间获取了三个参数：开始的虚拟地址、要检查的页面数量、以及存放结果的用户空间地址。
+   - `argaddr()`和`argint()`函数用于从系统调用中获取传入的参数。这些参数是在用户程序中调用`pgaccess`时传递的。
 
-1. **参数解析**：
-   - `va`：要检查的起始虚拟地址。
-   - `pagenum`：要检查的页面数量。
-   - `abitsaddr`：用于存储结果位掩码的用户地址。
-2. **遍历页面**： 通过 `walk()` 函数获取每个页面的页表条目（PTE）。如果页表条目存在且访问位被设置，则在 `maskbits` 中相应的位置 1。`maskbits` 是一个位掩码，记录了每个页面是否被访问过。
-3. **清除访问位**： 在确认某个页面的访问位（PTE_A）被设置后，系统会将其清除，以便能够在将来的调用中重新检测页面的访问情况。
-4. **将结果拷贝到用户空间**： 将 `maskbits` 的值拷贝到用户空间指定的地址 `abitsaddr`，以便用户程序可以读取该结果。
+2. **页表遍历与访问位检查**：
+   - 使用`walk()`函数来遍历页表，找到每个页面的页表项（PTE）。`walk()`函数根据虚拟地址在页表中找到对应的PTE。
+   - `PTE_A`是RISC-V中的访问位，每当处理器访问该页（无论是读还是写），这个位会被置为1。
+   - 对于每个页面，如果`PTE_A`位被置位，表示这个页面自上次检查后被访问过，那么就将对应的位掩码中的相应位置为1，然后将`PTE_A`位清除。
 
-通过这一过程，`sys_pgaccess()` 实现了检查并报告页面访问状态的功能，非常适用于需要检测内存访问行为的场景，例如垃圾收集器的实现。
+3. **结果存储**：
+   - 结果是一个位掩码（`res`），每一位对应一个页面，位的值为1表示该页面被访问过，为0表示没有被访问。
+   - 使用`copyout()`函数将结果从内核空间拷贝到用户空间指定的地址。
+
+4. **系统调用返回**：
+   - 最后，系统调用返回0，表示操作成功。
+
+##### 总结
+
+`sys_pgaccess`系统调用通过检查进程的页表项中的访问位，判断哪些页面被访问过，并将这些信息传递回用户空间。这在垃圾回收和内存管理等应用场景中非常有用。这个系统调用通过遍历页面并检查访问位实现了检测页面访问的功能，是实现高效内存管理的一个关键步骤。
 
 #### 定义`PTE_A`
 
@@ -897,4 +1027,12 @@ int sys_pgaccess(void)
 #define PTE_A (1L << 6)
 ```
 
+#### 测试成功
+
+<img src="img/test-3.png" alt="test-3" style="zoom:67%;" />
+
 ### 实验得分
+
+![test-4](img/test-4.png)
+
+* 尚不清楚bug所在。
