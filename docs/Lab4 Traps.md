@@ -141,3 +141,38 @@ printf(const char *fmt, ...)
 * ==Q4: What value is in the register `ra` just after the `jalr` to `printf` in `main`?==
 
 * A: `0x38`
+
+#### 运行指定代码
+
+<img src="img/test.png" alt="test" style="zoom:67%;" />
+
+* 观察输出：
+
+<img src="img/output.png" alt="output" style="zoom:67%;" />
+
+```bash
+He110 World
+```
+
+* 首先，`57616` 转换为 16 进制为 `e110`，所以格式化描述符 `%x` 打印出了它的 16 进制值。
+
+  其次，如果在小端（little-endian）处理器中，数据`0x00646c72` 的**高字节存储在内存的高位**，那么从**内存低位**，也就是**低字节**开始读取，对应的 ASCII 字符为 `rld`。
+
+  如果在 大端（big-endian）处理器中，数据 `0x00646c72` 的**高字节存储在内存的低位**，那么从**内存低位**，也就是**高字节**开始读取其 ASCII 码为 `dlr`。
+
+  所以如果大端序和小端序输出相同的内容 `i` ，那么在其为大端序的时候，`i` 的值应该为 `0x726c64`，这样才能保证从内存低位读取时的输出为 `rld` 。
+
+  无论 `57616` 在大端序还是小端序，它的二进制值都为 `e110` 。大端序和小端序只是改变了多字节数据在内存中的存放方式，并不改变其真正的值的大小，所以 `57616` 始终打印为二进制 `e110` 。
+
+* ==Q5: The output depends on that fact that the RISC-V is little-endian. If the RISC-V were instead big-endian what would you set `i` to in order to yield the same output? Would you need to change `57616` to a different value?==
+
+* A: 如果在大端序，`i` 的值应该为 `0x726c64` 才能保证与小端序输出的内容相同。不用该变 `57616` 的值。
+
+* ==Q6: In the following code, what is going to be printed after `'y='`? (note: the answer is not a specific value.) Why does this happen?==
+
+```c
+printf("x=%d y=%d", 3);
+```
+
+* 通过之前的章节可知，函数的参数是通过寄存器`a1`, `a2` 等来传递。如果 `prinf` 少传递一个参数，那么其仍会从一个确定的寄存器中读取其想要的参数值，但是我们并没有给出这个确定的参数并将其存储在寄存器中，所以函数将从此寄存器中获取到一个随机的不确定的值作为其参数。故而此例中，`y=`后面的值我们不能够确定，它是一个垃圾值。
+* A: `y=` 之后的值为一个不确定的垃圾值。
