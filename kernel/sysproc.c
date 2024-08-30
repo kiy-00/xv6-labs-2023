@@ -71,46 +71,40 @@ sys_sleep(void)
 
 
 #ifdef LAB_PGTBL
+// 定义sys_pgaccess系统调用，用于检测哪些页面被访问过
 int
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
-   uint64 va;             // 定义变量 `va`，用于存储虚拟地址
-  int pagenum;           // 定义变量 `pagenum`，用于存储要检查的页面数量
-  uint64 abitsaddr;      // 定义变量 `abitsaddr`，用于存储用户空间中位掩码的地址
+  // 声明变量
+  uint64 vaddr;     // 用户虚拟地址
+  int num;          // 要检查的页面数
+  uint64 res_addr;  // 用于存储结果的用户空间地址
 
-  // 从用户空间中获取系统调用的三个参数
-  argaddr(0, &va);       // 获取第一个参数（起始虚拟地址）并存储在 `va` 中
-  argint(1, &pagenum);   // 获取第二个参数（页面数量）并存储在 `pagenum` 中
-  argaddr(2, &abitsaddr);// 获取第三个参数（位掩码的地址）并存储在 `abitsaddr` 中
+  // 从用户空间获取三个参数
+  argaddr(0, &vaddr);    // 获取第一个参数：虚拟地址
+  argint(1, &num);       // 获取第二个参数：页面数量
+  argaddr(2, &res_addr); // 获取第三个参数：结果存储地址
 
-  uint64 maskbits = 0;   // 初始化 `maskbits`，用于存储页面访问情况的位掩码
-  struct proc *proc = myproc(); // 获取当前进程的指针
+  struct proc *p = myproc();   // 获取当前进程指针
+  pagetable_t pagetable = p->pagetable;  // 获取当前进程的页表指针
+  uint64 res = 0;   // 初始化结果变量，表示哪些页面被访问过的位掩码
 
-  // 遍历每一个需要检查的页面
-  for (int i = 0; i < pagenum; i++) {
-    // 通过 `walk` 函数获取虚拟地址 `va + i * PGSIZE` 对应的页表条目（PTE）
-    pte_t *pte = walk(proc->pagetable, va + i * PGSIZE, 0);
+  // 遍历需要检查的页面
+  for(int i = 0; i < num; i++){
+    // 获取当前页面的页表项（PTE）
+    pte_t* pte = walk(pagetable, vaddr + PGSIZE * i, 1);
 
-    // 如果页表条目不存在，则触发 panic，说明页不存在
-    if (pte == 0)
-      panic("page not exist.");
-
-    // 检查页表条目中的访问位（PTE_A）是否被设置
-    if (PTE_FLAGS(*pte) & PTE_A) {
-      // 如果访问位被设置，将对应的位在 `maskbits` 中置 1
-      maskbits = maskbits | (1L << i);
+    // 检查PTE中的访问位PTE_A，如果被访问过
+    if(*pte & PTE_A){
+      *pte &= (~PTE_A);   // 清除访问位，表示已经记录了访问
+      res |= (1L << i);   // 设置结果位掩码中相应的位，表示这个页面被访问过
     }
-
-    // 清除 PTE_A 访问位，将访问位置为 0
-    *pte = ((*pte & PTE_A) ^ *pte) ^ 0;
   }
 
-  // 将 `maskbits` 拷贝到用户空间指定的地址 `abitsaddr` 中
-  if (copyout(proc->pagetable, abitsaddr, (char *)&maskbits, sizeof(maskbits)) < 0)
-    panic("sys_pgacess copyout error"); // 如果拷贝失败，触发 panic
+  // 将结果从内核空间拷贝到用户空间
+  copyout(pagetable, res_addr, (char*)&res, sizeof(uint64));
 
-  return 0; // 返回 0 表示成功
+  return 0;  // 返回0，表示系统调用成功
 }
 #endif
 
