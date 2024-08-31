@@ -29,36 +29,9 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
-int
-cowhandler(pagetable_t pagetable, uint64 va)
-{
-    char *mem;
-    if (va >= MAXVA)
-      return -1;
-    pte_t *pte = walk(pagetable, va, 0);
-    if (pte == 0)
-      return -1;
-    // check the PTE
-    if ((*pte & PTE_RSW) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
-      return -1;
-    }
-    if ((mem = kalloc()) == 0) {
-      return -1;
-    }
-    // old physical address
-    uint64 pa = PTE2PA(*pte);
-    // copy old data to new mem
-    memmove((char*)mem, (char*)pa, PGSIZE);
-    // PAY ATTENTION
-    // decrease the reference count of old memory page, because a new page has been allocated
-    kfree((void*)pa);
-    uint flags = PTE_FLAGS(*pte);
-    // set PTE_W to 1, change the address pointed to by PTE to new memory page(mem)
-    *pte = (PA2PTE(mem) | flags | PTE_W);
-    // set PTE_RSW to 0
-    *pte &= ~PTE_RSW;
-    return 0;
-}
+extern int page_refcnt[PHYSTOP/PGSIZE];
+extern char end[]; // first address after kernel.
+                   // defined by kernel.ld.
 
 //
 // handle an interrupt, exception, or system call from user space.
@@ -96,26 +69,56 @@ usertrap(void)
     intr_on();
 
     syscall();
-  }
-  else if (r_scause() == 15) {
-    // Store/AMO page fault(write page fault) and Load page fault
-    // see Volume II: RISC-V Privileged Architectures V20211203 Page 71
-    
-    // the faulting virtual address
-    // see Volume II: RISC-V Privileged Architectures V20211203 Page 41
-    // the download url is https://github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf
-    uint64 va = r_stval();
-    if (va >= p->sz)
-      p->killed = 1;
-    int ret = cowhandler(p->pagetable, va);
-    if (ret != 0)
-      p->killed = 1;
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    setkilled(p);
+  }
+  else // Encountered a fault here. 
+  {
+    // Handle COW page writing here. --XHZ
+    if(r_scause()==15) // Store/AMO page fault
+    {
+      // printf("Encountered exception: Store/AMO page fault\n");
+      uint64 write_va = r_stval();
+      if(write_va>=MAXVA) goto unexpected_scause; // Should not access virtual address beyond MAXVA! (In usertests)
+      pagetable_t pagetable = myproc()->pagetable;
+      pte_t *pte = walk(pagetable, write_va, 0);
+      if(*pte & PTE_COW) // This page is a COW page
+      {
+        // Allocates memory for the new page. 
+        char *mem;
+        if((mem = kalloc()) == 0)
+        {
+          not_enough_physical_memory_error:
+          // On kalloc() error, what to do? The lab requires to kill this process. 
+          printf("Not enough physical memory when copy-on-write! pid=%d\n", p->pid);
+          setkilled(p);
+        }
+
+        // Copy the page. 
+        memmove(mem, (char*)PTE2PA(*pte), PGSIZE);
+
+        // Remap the new page to the page table. 
+        uint flags = PTE_FLAGS(*pte);
+        flags = (flags & (~PTE_COW)) | PTE_W; // Give it permission to write, and mark as not COW. 
+        uvmunmap(pagetable, PGROUNDDOWN(write_va), 1, 1); // Unmap the old COW page from the pagetable, and kfree() it. 
+        if(mappages(pagetable, PGROUNDDOWN(write_va), PGSIZE, (uint64)mem, flags) != 0){
+          kfree(mem);
+          printf("This should never happen! The page SHOULD exist. mappages() won't fail!!! \n");
+          goto not_enough_physical_memory_error;
+        }
+      }
+      else // This page is not a COW page
+      {
+        goto unexpected_scause;
+      }
+    }
+    else
+    {
+      unexpected_scause:
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
   }
 
   if(killed(p))
