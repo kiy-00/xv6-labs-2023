@@ -753,6 +753,7 @@ kalloc(void)
 
 - **定义 `USYSCALL` 虚拟地址**：选择一个未被使用的高地址区域作为 `USYSCALL` 的映射地址。
 - **定义 `struct usyscall`**：该结构体将存储进程的 `pid`。
+- （这一步已经被实现了）
 
 **代码示例**：
 
@@ -1094,4 +1095,4 @@ sys_pgaccess(void)
 
 ![test-4](img/test-4.png)
 
-* 尚不清楚bug所在。
+* 尚不清楚bug所在（已解决，应该是之前的做法不必要的更改了一些系统调用函数，导致usertests没有通过）。
