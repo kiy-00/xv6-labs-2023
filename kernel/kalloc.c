@@ -21,17 +21,19 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem[NCPU];
+} kmems[NCPU];
 
 void
 kinit()
 {
-  char buf[10];
-  for (int i = 0; i < NCPU; i++)
+  for(int id = 0;id<NCPU;id++)
   {
-    snprintf(buf, 10, "kmem_CPU%d", i);
-    initlock(&kmem[i].lock, buf);
+    char name_buf[16] = {0};
+    snprintf(name_buf, sizeof(name_buf), "kmem_lock_%d", id);
+    printf("kmem lock name: %s\n", name_buf);
+    initlock(&kmems[id].lock, name_buf);
   }
+  printf("kinit(): initlock() complete. \n");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -42,9 +44,10 @@ freerange(void *pa_start, void *pa_end)
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
+  printf("freerange() at CPU %d: Complete. \n", cpuid());
 }
 
-// Free the page of physical memory pointed at by v,
+// Free the page of physical memory pointed at by pa,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
@@ -61,16 +64,11 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  // Ensure not interrupted while getting the CPU ID
-  push_off();
-  // Get the ID of the current CPU
-  int cpu = cpuid();
-  pop_off();
-
-  acquire(&kmem[cpu].lock);
-  r->next = kmem[cpu].freelist;
-  kmem[cpu].freelist = r;
-  release(&kmem[cpu].lock);
+  int cpu_id = cpuid(); // DO NOT call cpuid() several times: the results may be different!!! 
+  acquire(&kmems[cpu_id].lock);
+  r->next = kmems[cpu_id].freelist;
+  kmems[cpu_id].freelist = r;
+  release(&kmems[cpu_id].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -79,58 +77,30 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+  // push_off(); // Avoid the swith of CPU
   struct run *r;
+  int cpu_id = cpuid(); // DO NOT call cpuid() several times: the results may be different!!! 
 
-  push_off();
-  int cpu = cpuid();
-  pop_off();
-
-  acquire(&kmem[cpu].lock);
-  r = kmem[cpu].freelist;
+  acquire(&kmems[cpu_id].lock);
+  r = kmems[cpu_id].freelist;
   if(r)
-    kmem[cpu].freelist = r->next;
-  else // add: steal page from other CPU
+    kmems[cpu_id].freelist = r->next;
+  release(&kmems[cpu_id].lock);
+  for(int id = 0;!r && id<NCPU;id++)
   {
-    struct run* tmp;
-
-    // Loop over all other CPUs in NCPU range
-    for (int i = 0; i < NCPU; ++i)
-    {
-      if (i == cpu) // can't be itself
-        continue;
-
-      // Acquire a lock on its freelist to prevent contention.
-      acquire(&kmem[i].lock);
-      tmp = kmem[i].freelist;
-      // no page to steal
-      if (tmp == 0) {
-        release(&kmem[i].lock);
-        continue;
-      } else {
-        for (int j = 0; j < 1024; j++) {
-          // steal 1024 pages
-          if (tmp->next)
-            tmp = tmp->next;
-          else
-            break;
-        }
-
-        // change freelist
-        kmem[cpu].freelist = kmem[i].freelist;
-        kmem[i].freelist = tmp->next;
-        tmp->next = 0;
-
-        release(&kmem[i].lock);
-        break;
-      }
-    }
-    r = kmem[cpu].freelist;
-    if (r)
-      kmem[cpu].freelist = r->next;
-  } // end steal page from other CPU
-  release(&kmem[cpu].lock);
+    if(id==cpu_id) continue;
+    acquire(&kmems[id].lock);
+    r = kmems[id].freelist;
+    if(r)
+      kmems[id].freelist = r->next;
+    release(&kmems[id].lock);
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+  else
+    printf("kalloc() at CPU %d: Cannot allocate memory. \n", cpu_id);
+  
+  // pop_off();
   return (void*)r;
 }
