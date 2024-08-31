@@ -382,7 +382,7 @@
 - **改动前**:
 
   ```c
-  
+  //kernel/bio.c
   void
   brelse(struct buf *b)
   {
@@ -447,7 +447,7 @@
 
 ### 实验得分
 
-
+![score](img/score.png)
 
 
 
