@@ -438,3 +438,4 @@ extern int page_refcnt[PHYSTOP/PGSIZE];
 
 ### 实验得分
 
+<img src="img/score.png" alt="score" style="zoom:67%;" />
