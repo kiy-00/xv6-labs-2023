@@ -731,95 +731,154 @@ kalloc(void)
 
   当每一个进程被创建，映射一个只读的页在 **USYSCALL** （在`memlayout.h`定义的一个虚拟地址）处。存储一个 `struct usyscall` （定义在 `memlayout.h`）结构体在该页的开始处，并且初始化这个结构体来保存当前进程的 PID。这个 lab 中，`ugetpid()` 已经在用户空间给出，它将会使用 **USYSCALL** 这个映射。运行 `pgtbltest` ，如果正确，`ugetpid` 这一项将会通过。
 
-#### 更改`kernel/proc.h`中的`struct proc`
+是的，您提供的代码修改正是为了完成该实验任务。以下是详细的步骤说明，包括每一步的修改意义、原理以及相关的代码变动部分。这将帮助您在 xv6 操作系统中实现加速 `getpid()` 系统调用的优化。
 
-* 首先在 `kernel/proc.h` proc 结构体中添加一项指针来保存这个共享页面的地址。
+
+
+**目标**：通过在用户空间和内核之间共享一个只读页面，存储进程的 `pid`，从而加速 `getpid()` 系统调用，避免频繁的内核切换。
+
+**实现方式**：
+
+1. **在每个进程创建时，映射一个只读页面到 `USYSCALL` 虚拟地址**。
+2. **在该页面的起始位置存储一个 `struct usyscall`，其中包含当前进程的 `pid`**。
+3. **用户空间提供的 `ugetpid()` 函数将通过读取 `USYSCALL` 映射的页面来获取 `pid`，无需进入内核**。
+
+#### 详细实现步骤
+
+##### 1. 定义 `USYSCALL` 和 `struct usyscall`
+
+**文件**：`kernel/memlayout.h`
+
+**修改内容**：
+
+- **定义 `USYSCALL` 虚拟地址**：选择一个未被使用的高地址区域作为 `USYSCALL` 的映射地址。
+- **定义 `struct usyscall`**：该结构体将存储进程的 `pid`。
+
+**代码示例**：
 
 ```c
-struct proc {
-...
-  struct usyscall *usyscallpage;  // share page whithin kernel and user
-...
-}
+// ... 其他定义 ...
+
+// 定义 USYSCALL 的虚拟地址
+#define USYSCALL (TRAPFRAME - PGSIZE)
+
+// 定义 usyscall 结构体
+struct usyscall {
+    int pid;
+};
+
+#endif // MEMLAYOUT_H
 ```
 
-#### 为共享页面分配空间
+**修改意义与原理**：
 
-* 之后需要在 `kernel/proc.c` 的 `allocproc()` 中为其分配空间(`kalloc`)。并初始化其保存当前进程的PID。
-
-```c
-static struct proc*
-allocproc(void) {
-...
-  if ((p->usyscallpage = (struct usyscall *)kalloc()) == 0) {
-    freeproc(p);
-    release(&p->lock);
-    return 0;
-  }
-
-  p->usyscallpage->pid = p->pid;
+- **`USYSCALL` 地址定义**：选择一个高虚拟地址空间，确保不与现有的用户空间地址冲突。此地址将用于映射一个只读页面，存储系统调用所需的数据。
   
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
-...
-}
-```
+- **`struct usyscall` 结构体**：通过在用户空间映射一个包含 `pid` 的结构体，用户程序可以直接读取该结构体获取 `pid`，避免了进入内核进行系统调用，从而提升性能。
 
-#### 将映射（PTE）写入 pagetable 中
+##### 2. 修改 `proc_pagetable` 函数以映射 `USYSCALL` 页面
 
-* 然后在 `kernel/proc.c` 的 `proc_pagetable(struct proc *p)` 中将这个映射（PTE）写入 pagetable 中。权限是用户态可读。
+**文件**：`kernel/proc.c`
+
+**修改内容**：
+
+在 `proc_pagetable` 函数中，添加对 `USYSCALL` 页面映射的逻辑，分配一个物理页面，将其映射到 `USYSCALL` 虚拟地址，并初始化 `usyscall.pid`。
+
+**代码示例**：
 
 ```c
+// proc.c
+
+#include "memlayout.h"
+
+// ... 其他代码 ...
+
 pagetable_t
-proc_pagetable(struct proc *p) {
-...
-    if(mappages(pagetable, USYSCALL, PGSIZE, (uint64)(p->usyscallpage), PTE_R | PTE_U) < 0) {
-    uvmfree(pagetable, 0);
-    return 0;
-  }
-  // map the trampoline code (for system call return)
-  // at the highest user virtual address.
-  // only the supervisor uses it, on the way
-...
+proc_pagetable(struct proc *p)
+{
+    pagetable_t pagetable;
+
+    // 创建一个空的页表
+    pagetable = uvmcreate();
+    if(pagetable == 0)
+        return 0;
+
+    // 映射 trampoline 代码（用于系统调用返回）
+    if(mappages(pagetable, TRAMPOLINE, PGSIZE,
+                (uint64)trampoline, PTE_R | PTE_X) < 0){
+        uvmfree(pagetable, 0);
+        return 0;
+    }
+
+    // 映射 trapframe 页面
+    if(mappages(pagetable, TRAPFRAME, PGSIZE,
+                (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+        uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+        uvmfree(pagetable, 0);
+        return 0;
+    }
+
+    // **新增部分：映射 USYSCALL 页面**
+    uint64 usyscall_pa = (uint64)kalloc(); // 分配物理页面
+    if(usyscall_pa == 0 || // 分配失败
+       mappages(pagetable, USYSCALL, PGSIZE, 
+                usyscall_pa, PTE_R | PTE_U) < 0) // 映射失败
+    {
+        uvmunmap(pagetable, TRAPFRAME, 1, 0);
+        uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+        uvmfree(pagetable, 0);
+        return 0;
+    }
+    else // 映射成功，初始化 usyscall 结构体
+    {
+        ((struct usyscall *)usyscall_pa)->pid = p->pid;
+    }
+
+    return pagetable;
 }
 ```
 
-#### 释放该共享页
+**修改意义与原理**：
 
-* 之后要确保释放进程的时候，能够释放该共享页。同样在 `kernel/proc.c` 中的 `freeproc(struct proc *p)` 。
+- **物理页面分配 (`kalloc`)**：为 `USYSCALL` 分配一个新的物理页面，用于存储 `struct usyscall` 结构体。
 
-```c
-static void
-freeproc(struct proc *p) {
-  if(p->trapframe)
-    kfree((void*)p->trapframe);
-  p->trapframe = 0;
-  // add start
-  if(p->usyscallpage)
-    kfree((void *)p->usyscallpage);
-  p->usyscallpage = 0;
-  // add end
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
-}
-```
+- **页面映射 (`mappages`)**：将分配的物理页面映射到用户空间的 `USYSCALL` 虚拟地址，设置权限为只读 (`PTE_R`) 并允许用户访问 (`PTE_U`)。
 
-#### 修改`PTE`映射
+- **初始化 `usyscall.pid`**：在映射成功后，初始化 `struct usyscall` 中的 `pid` 为当前进程的 `pid`，以供用户空间直接读取。
 
-* 在 `pagetable` 中任然存在我们之前的 PTE 映射。我们需要在 `kernel/proc.c` 的 `proc_freepagetable(pagetable_t pagetable, uint64 sz)` 中对其取消映射。
+##### 3. 修改 `proc_freepagetable` 函数以解除 `USYSCALL` 页面映射并释放物理页面
+
+**文件**：`kernel/proc.c`
+
+**修改内容**：
+
+在 `proc_freepagetable` 函数中，增加对 `USYSCALL` 页面的解映射，并释放其占用的物理内存。
+
+**代码示例**：
 
 ```c
+// proc.c
+
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz) {
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, TRAPFRAME, 1, 0);
-  uvmunmap(pagetable, USYSCALL, 1, 0); // add
-  uvmfree(pagetable, sz);
+proc_freepagetable(pagetable_t pagetable, uint64 sz)
+{
+    // 解除 trampoline 和 trapframe 的映射
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    
+    // **新增部分：解除 USYSCALL 的映射并释放物理页面**
+    uvmunmap(pagetable, USYSCALL, 1, 1); // 最后一个参数为1，表示释放物理页面
+
+    // 释放页表
+    uvmfree(pagetable, sz);
 }
 ```
+
+**修改意义与原理**：
+
+- **解除 `USYSCALL` 映射 (`uvmunmap`)**：确保在进程结束时，`USYSCALL` 页面不再映射到用户空间，防止资源泄漏。
+
+- **释放物理页面**：通过设置 `uvmunmap` 的最后一个参数为 `1`，指示函数释放对应的物理页面，确保内存资源得到回收。
 
 #### 测试成功
 
