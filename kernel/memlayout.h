@@ -73,7 +73,8 @@
 #ifdef LAB_PGTBL
 #define USYSCALL (TRAPFRAME - PGSIZE)
 
+// 定义 usyscall 结构体
 struct usyscall {
-  int pid;  // Process ID
+    int pid;
 };
 #endif
