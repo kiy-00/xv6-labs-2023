@@ -308,7 +308,6 @@ fork(void)
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
-  // Added by XHZ
   // Copy the struct vma array. 
   np->vma_top_addr = p->vma_top_addr;
   for(int i = 0;i<VMA_MAX;i++)

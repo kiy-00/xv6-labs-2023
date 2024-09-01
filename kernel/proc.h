@@ -118,7 +118,6 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
-  // Added by XHZ
   struct vma vma_array[VMA_MAX];
   uint64 vma_top_addr;
 };

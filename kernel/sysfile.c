@@ -16,6 +16,7 @@
 #include "file.h"
 #include "fcntl.h"
 
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -528,6 +529,7 @@ uint64 sys_mmap(void)
       break;
   if(idx==VMA_MAX)
     panic("All VMA struct is full!");
+  // printf("sys_mmap: Find available VMA struct, idx = %d\n", idx);
   
   // Fill this VMA struct.
   struct vma* vp = &p->vma_array[idx];
@@ -540,6 +542,7 @@ uint64 sys_mmap(void)
   filedup(f); // This file's refcnt += 1. 
   p->vma_top_addr-=len;
   vp->addr = p->vma_top_addr; // The usable user virtual address. 
+  // printf("sys_mmap: Successfully mapped a file, with addr=%p, len=%x\n", vp->addr, vp->len);
   return vp->addr;
 }
 
@@ -555,6 +558,7 @@ uint64 sys_munmap(void)
   // Find the VMA struct that this file belongs to. 
   for(struct vma *now = p->vma_array;now<p->vma_array+VMA_MAX;now++)
   {
+    // printf("usertrap: VMA, addr=%p, len=%x, valid=%d\n", now->addr, now->len, now->valid);
     if(now->addr<=addr && addr<now->addr+now->len 
         && now->valid)
     {
