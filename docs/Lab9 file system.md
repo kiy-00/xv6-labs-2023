@@ -19,162 +19,267 @@
 - `struct dinode`（定义在`fs.h`中）描述了磁盘上的inode结构。你需要关注`NDIRECT`、`NINDIRECT`、`MAXFILE`以及`struct dinode`中的`addrs[]`元素。
 - `bmap()`函数位于`fs.c`中，用于查找文件在磁盘上的数据块。`bmap()`会根据需要分配新块以容纳文件内容，并在需要时分配间接块来存储块地址。
 
-#### 修改`bmap`及`itrunc`函数：
 
-- 你需要在`bmap()`中实现双重间接块（doubly-indirect block），同时保持对直接块和单一间接块的支持。
-- 将`ip->addrs[]`的前11个元素保留为直接块，第12个元素用作单一间接块，第13个元素用作新的双重间接块。
-- 修改后的`bmap()`应该能够映射文件的逻辑块号（bn）到磁盘块号，并在需要时分配新的块。
 
-```c
-// Return the disk block address of the nth block in inode ip.
-// If there is no such block, bmap allocates one.
-static uint
-bmap(struct inode *ip, uint bn)
-{
-  uint addr, *a;
-  struct buf *bp;
+#### 步骤
 
-  if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = balloc(ip->dev);
-    return addr;
-  }
-  bn -= NDIRECT;
+##### 1. 增加双重间接块支持
 
-  if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
-    if((addr = a[bn]) == 0){
-      a[bn] = addr = balloc(ip->dev);
-      log_write(bp);
-    }
-    brelse(bp);
-    return addr;
-  }
+- **原始代码**:
 
-  bn -= NINDIRECT;
-  // 去除已经由直接块和单间接块映射的块数，以得到在双间接块中的相对块号
-
-  if (bn < NDBL_INDIRECT) {
-    // 如果文件的双间接块不存在，则分配一个
-    if ((addr = ip->addrs[NDIRECT + 1]) == 0) {
-      addr = balloc(ip->dev);
-      if (addr == 0)
-        return 0;
-      ip->addrs[NDIRECT + 1] = addr;
-    }
-
-    // 读取双间接块
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
-
-    // 计算在单间接块数组中的索引，即第几个单间接块
-    uint index1 = bn / NINDIRECT;
+  ```c
+  //kernel/fs.c
+  static uint
+  bmap(struct inode *ip, uint bn)
+  {
+    uint addr, *a;
+    struct buf *bp;
   
-    // 如果这个单间接块不存在，则分配一个
-    if ((addr = a[index1]) == 0) {
-      addr = balloc(ip->dev);
-      if (addr == 0)
-        return 0;
-      a[bn / NINDIRECT] = addr;
-      log_write(bp);  // Record changes in the log
-    }
-    brelse(bp);
-
-    // 读取相应的单间接块
-    bp = bread(ip->dev, addr);
-    a = (uint *)bp->data;
-
-    // 计算在单间接块中的索引，即单间接块中的第几个数据块
-    uint index2 = bn % NINDIRECT;
-
-    // 如果这个数据块不存在，则分配一个
-    if ((addr = a[index2]) == 0) {
-      addr = balloc(ip->dev);
-      if (addr == 0)
-        return 0;
-      a[bn % NINDIRECT] = addr;
-      log_write(bp);  // Record changes in the log
-    }
-    brelse(bp);
-    return addr;  // Returns the actual data block
-  }
-
-  panic("bmap: out of range");
-}
-```
-
-```c
-// Truncate inode (discard contents).
-// Caller must hold ip->lock.
-void
-itrunc(struct inode *ip)
-{
-  int i, j;
-  struct buf *bp;
-  uint *a;
-
-  for(i = 0; i < NDIRECT; i++){
-    if(ip->addrs[i]){
-      bfree(ip->dev, ip->addrs[i]);
-      ip->addrs[i] = 0;
-    }
-  }
-
-  if(ip->addrs[NDIRECT]){
-    bp = bread(ip->dev, ip->addrs[NDIRECT]);
-    a = (uint*)bp->data;
-    for(j = 0; j < NINDIRECT; j++){
-      if(a[j])
-        bfree(ip->dev, a[j]);
-    }
-    brelse(bp);
-    bfree(ip->dev, ip->addrs[NDIRECT]);
-    ip->addrs[NDIRECT] = 0;
-  }
-
-  if (ip->addrs[NDIRECT + 1]) {
-    // 读取双间接块
-    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
-    a = (uint*)bp->data;
-
-    for (i = 0; i < NINDIRECT; ++i) {
-      if (a[i] == 0) continue;
-
-      // 读取单间接块
-      struct buf* bp2 = bread(ip->dev, a[i]);
-      uint* b = (uint*)bp2->data;
-      for (j = 0; j < NINDIRECT; ++j) {
-        if (b[j])
-          bfree(ip->dev, b[j]); // 释放数据块
+    if(bn < NDIRECT){
+      if((addr = ip->addrs[bn]) == 0){
+        addr = balloc(ip->dev);
+        if(addr == 0)
+          return 0;
+        ip->addrs[bn] = addr;
       }
-      brelse(bp2);
-
-      bfree(ip->dev, a[i]); // 释放单间接块
-      a[i] = 0;
+      return addr;
     }
-    brelse(bp);
-
-    bfree(ip->dev, ip->addrs[NDIRECT + 1]); // 释放双间接块
-    ip->addrs[NDIRECT + 1] = 0;
+    bn -= NDIRECT;
+  
+    if(bn < NINDIRECT){
+      // 加载单一间接块，如有需要则进行分配。
+      if((addr = ip->addrs[NDIRECT]) == 0){
+        addr = balloc(ip->dev);
+        if(addr == 0)
+          return 0;
+        ip->addrs[NDIRECT] = addr;
+      }
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data;
+      if((addr = a[bn]) == 0){
+        addr = balloc(ip->dev);
+        if(addr){
+          a[bn] = addr;
+          log_write(bp);
+        }
+      }
+      brelse(bp);
+      return addr;
+    }
+    panic("bmap: out of range");
   }
+  ```
 
-  ip->size = 0;
-  iupdate(ip);
-}
-```
+  - 在原始代码中，`bmap` 函数只支持最多 12 个直接块和 1 个单一间接块。这限制了文件的最大大小为 268 个块。
 
-#### 修改`struct inode`
+- **修改后代码**:
 
-* `kernel/file.h`:
+  ```c
+  //kernel/fs.c
+  static uint
+  bmap(struct inode *ip, uint bn)
+  {
+    uint addr, *a;
+    struct buf *bp;
+  
+    if(bn < NDIRECT){
+      if((addr = ip->addrs[bn]) == 0)
+        ip->addrs[bn] = addr = balloc(ip->dev);
+      return addr;
+    }
+    bn -= NDIRECT;
+  
+    if(bn < NINDIRECT){
+      // 加载单一间接块，如有需要则进行分配。
+      if((addr = ip->addrs[NDIRECT]) == 0)
+        ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data;
+      if((addr = a[bn]) == 0){
+        a[bn] = addr = balloc(ip->dev);
+        log_write(bp);
+      }
+      brelse(bp);
+      return addr;
+    }
+    bn -= NINDIRECT;
+  
+    // 处理双重间接块的情况
+    if(bn < NDINDIRECT) {
+      int level2_idx = bn / NADDR_PER_BLOCK;  // 二级间接块的位置
+      int level1_idx = bn % NADDR_PER_BLOCK;  // 一级间接块的位置
+      // 读取二级间接块
+      if((addr = ip->addrs[NDIRECT + 1]) == 0)
+        ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data;
+  
+      if((addr = a[level2_idx]) == 0) {
+        a[level2_idx] = addr = balloc(ip->dev);
+        log_write(bp);
+      }
+      brelse(bp);
+  
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data;
+      if((addr = a[level1_idx]) == 0) {
+        a[level1_idx] = addr = balloc(ip->dev);
+        log_write(bp);
+      }
+      brelse(bp);
+      return addr;
+    }
+    panic("bmap: out of range");
+  }
+  ```
 
-```c
-//添加到结构体中
-uint addrs[NDIRECT+2];
-```
+  - 修改后的代码添加了对双重间接块的支持，从而允许文件的最大大小扩展至 65,803 个块。该修改通过将一个直接块的位置用于双重间接块，从而增加了文件系统的容量。
+
+  **目的**: 支持更大文件尺寸。通过引入双重间接块，文件系统可以管理比之前更大的文件。
+
+##### 2. 增加双重间接块的截断支持
+
+- **原始代码**:
+
+  ```c
+  void
+  itrunc(struct inode *ip)
+  {
+    int i, j;
+    struct buf *bp;
+    uint *a;
+  
+    for(i = 0; i < NDIRECT; i++){
+      if(ip->addrs[i]){
+        bfree(ip->dev, ip->addrs[i]);
+        ip->addrs[i] = 0;
+      }
+    }
+  
+    if(ip->addrs[NDIRECT]){
+      bp = bread(ip->dev, ip->addrs[NDIRECT]);
+      a = (uint*)bp->data;
+      for(j = 0; j < NINDIRECT; j++){
+        if(a[j])
+          bfree(ip->dev, a[j]);
+      }
+      brelse(bp);
+      bfree(ip->dev, ip->addrs[NDIRECT]);
+      ip->addrs[NDIRECT] = 0;
+    }
+    
+    ip->size = 0;
+    iupdate(ip);
+  }
+  ```
+
+  - 原始代码只处理直接块和单一间接块的截断操作。
+
+- **修改后代码**:
+
+  ```c
+  void
+  itrunc(struct inode *ip)
+  {
+    int i, j;
+    struct buf *bp;
+    uint *a;
+  
+    for(i = 0; i < NDIRECT; i++){
+      if(ip->addrs[i]){
+        bfree(ip->dev, ip->addrs[i]);
+        ip->addrs[i] = 0;
+      }
+    }
+  
+    if(ip->addrs[NDIRECT]){
+      bp = bread(ip->dev, ip->addrs[NDIRECT]);
+      a = (uint*)bp->data;
+      for(j = 0; j < NINDIRECT; j++){
+        if(a[j])
+          bfree(ip->dev, a[j]);
+      }
+      brelse(bp);
+      bfree(ip->dev, ip->addrs[NDIRECT]);
+      ip->addrs[NDIRECT] = 0;
+    }
+    
+    // 处理双重间接块的截断
+    struct buf* bp1;
+    uint* a1;
+    if(ip->addrs[NDIRECT + 1]) {
+      bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+      a = (uint*)bp->data;
+      for(i = 0; i < NADDR_PER_BLOCK; i++) {
+        if(a[i]) {
+          bp1 = bread(ip->dev, a[i]);
+          a1 = (uint*)bp1->data;
+          for(j = 0; j < NADDR_PER_BLOCK; j++) {
+            if(a1[j])
+              bfree(ip->dev, a1[j]);
+          }
+          brelse(bp1);
+          bfree(ip->dev, a[i]);
+        }
+      }
+      brelse(bp);
+      bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+      ip->addrs[NDIRECT + 1] = 0;
+    }
+    
+    ip->size = 0;
+    iupdate(ip);
+  }
+  ```
+
+  - 修改后的代码支持双重间接块的截断操作，确保当文件被删除或缩小时，所有分配的块都能被正确释放。
+
+  **目的**: 使得文件系统能够正确管理更大文件的块分配，并在文件被截断时释放所有相关的块。
+
+##### 3. `kernel/fs.h`中`NDIRECT`的修改
+
+  - **原文件**: `#define NDIRECT 12`
+  - **修改后**: `#define NDIRECT 11`
+  - **目的**: 减少直接块的数量，从而为新增的双重间接块腾出空间。
+
+##### 4. 增加`NDINDIRECT`和`NADDR_PER_BLOCK`宏定义
+
+  - 修改后新增:
+
+    ```c
+    //kernel/fs.h
+    #define NDINDIRECT ((BSIZE / sizeof(uint)) * (BSIZE / sizeof(uint)))
+    #define NADDR_PER_BLOCK (BSIZE / sizeof(uint))
+    ```
+
+  - 目的:
+
+    - `NDINDIRECT` 用于定义双重间接块可以引用的总块数。
+- `NADDR_PER_BLOCK` 用于计算一个块中可以存储的地址数量。
+
+##### 5. 修改MAXFILE的计算
+
+- **原文件**: `#define MAXFILE (NDIRECT + NINDIRECT)`
+- **修改后**: `#define MAXFILE (NDIRECT + NINDIRECT + NDINDIRECT)`
+- **目的**: 将 `MAXFILE` 的计算范围扩展到包含双重间接块，这样可以支持更大的文件。
+
+##### 6. **增加Inode中`addrs`数组的大小**
+
+- **原文件**: `uint addrs[NDIRECT+1];`
+- **修改后**: `uint addrs[NDIRECT+2];`
+- **目的**: 扩展`addrs`数组的大小以支持双重间接块。
+
+  #### `kernel/fs.h`修改内容原理解释
+
+  在原始的文件系统设计中，`inode` 包含了 `NDIRECT` 个直接块地址和 1 个单重间接块地址，这意味着一个文件最多可以使用 12 个直接块和 256 个通过单一间接块引用的块，总共 268 个块。
+
+  在修改后的设计中，通过减少一个直接块的数量（即将 `NDIRECT` 从 12 减少到 11），我们腾出了一个新的地址项，用于存储一个双重间接块的地址。双重间接块使得文件系统可以通过多层间接块引用更多的磁盘块，从而大大增加了文件的最大支持大小。新的`MAXFILE`值反映了这一变化，最大文件大小从268个块增加到65,803个块。
+
+  具体来说，双重间接块使用了两级索引来指向数据块。第一级索引块包含指向第二级索引块的地址，而第二级索引块又包含指向数据块的地址。这个设计允许文件系统支持极大的文件尺寸，符合更大数据需求的应用场景。
+
+#### 测试成功
+
+
 
 ### Symbolic links ([moderate](https://pdos.csail.mit.edu/6.828/2023/labs/guidance.html))
 
