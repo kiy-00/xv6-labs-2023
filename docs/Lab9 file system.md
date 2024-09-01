@@ -79,62 +79,93 @@
   static uint
   bmap(struct inode *ip, uint bn)
   {
-    uint addr, *a;
-    struct buf *bp;
-  
-    if(bn < NDIRECT){
-      if((addr = ip->addrs[bn]) == 0)
-        ip->addrs[bn] = addr = balloc(ip->dev);
-      return addr;
-    }
-    bn -= NDIRECT;
-  
-    if(bn < NINDIRECT){
-      // 加载单一间接块，如有需要则进行分配。
-      if((addr = ip->addrs[NDIRECT]) == 0)
-        ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-      bp = bread(ip->dev, addr);
-      a = (uint*)bp->data;
-      if((addr = a[bn]) == 0){
-        a[bn] = addr = balloc(ip->dev);
-        log_write(bp);
+      uint addr, *a;
+      struct buf *bp;
+      struct buf *bp1; // 用于双重间接块的缓存
+      
+      // 处理直接块
+      if (bn < NDIRECT) {
+          if ((addr = ip->addrs[bn]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr == 0)
+                  return 0;
+              ip->addrs[bn] = addr;
+          }
+          return addr;
       }
-      brelse(bp);
-      return addr;
-    }
-    bn -= NINDIRECT;
-  
-    // 处理双重间接块的情况
-    if(bn < NDINDIRECT) {
-      int level2_idx = bn / NADDR_PER_BLOCK;  // 二级间接块的位置
-      int level1_idx = bn % NADDR_PER_BLOCK;  // 一级间接块的位置
-      // 读取二级间接块
-      if((addr = ip->addrs[NDIRECT + 1]) == 0)
-        ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
-      bp = bread(ip->dev, addr);
-      a = (uint*)bp->data;
-  
-      if((addr = a[level2_idx]) == 0) {
-        a[level2_idx] = addr = balloc(ip->dev);
-        log_write(bp);
+      bn -= NDIRECT;
+      
+      // 处理单一间接块
+      if (bn < NINDIRECT) {
+          if ((addr = ip->addrs[NDIRECT]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr == 0)
+                  return 0;
+              ip->addrs[NDIRECT] = addr;
+          }
+          bp = bread(ip->dev, addr);
+          a = (uint*)bp->data;
+          if ((addr = a[bn]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr) {
+                  a[bn] = addr;
+                  log_write(bp);
+              }
+          }
+          brelse(bp);
+          return addr;
       }
-      brelse(bp);
-  
-      bp = bread(ip->dev, addr);
-      a = (uint*)bp->data;
-      if((addr = a[level1_idx]) == 0) {
-        a[level1_idx] = addr = balloc(ip->dev);
-        log_write(bp);
+      bn -= NINDIRECT;
+      
+      // 处理双重间接块
+      if (bn < NINDIRECT * NINDIRECT) {
+          if ((addr = ip->addrs[NDIRECT + 1]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr == 0)
+                  return 0;
+              ip->addrs[NDIRECT + 1] = addr;
+          }
+          
+          bp = bread(ip->dev, addr); // 读取第一级间接块
+          a = (uint*)bp->data;
+          
+          // 加载第二级间接块
+          uint indirect_index = bn / NINDIRECT;
+          if ((addr = a[indirect_index]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr == 0) {
+                  brelse(bp);
+                  return 0;
+              }
+              a[indirect_index] = addr;
+              log_write(bp);
+          }
+          
+          bp1 = bread(ip->dev, addr); // 读取第二级间接块
+          a = (uint*)bp1->data;
+          
+          bn = bn % NINDIRECT;
+          if ((addr = a[bn]) == 0) {
+              addr = balloc(ip->dev);
+              if (addr) {
+                  a[bn] = addr;
+                  log_write(bp1);
+              }
+          }
+          
+          // 延迟释放缓存，确保在需要时还可以重用
+          brelse(bp1);
+          brelse(bp);
+          
+          return addr;
       }
-      brelse(bp);
-      return addr;
-    }
-    panic("bmap: out of range");
+      
+      panic("bmap: out of range");
   }
   ```
-
+  
   - 修改后的代码添加了对双重间接块的支持，从而允许文件的最大大小扩展至 65,803 个块。该修改通过将一个直接块的位置用于双重间接块，从而增加了文件系统的容量。
-
+  
   **目的**: 支持更大文件尺寸。通过引入双重间接块，文件系统可以管理比之前更大的文件。
 
 ##### 2. 增加双重间接块的截断支持
@@ -181,93 +212,107 @@
   void
   itrunc(struct inode *ip)
   {
-    int i, j;
-    struct buf *bp;
-    uint *a;
+      int i, j;
+      struct buf *bp;
+      struct buf *bp1;
+      uint *a;
+      uint *a1;
   
-    for(i = 0; i < NDIRECT; i++){
-      if(ip->addrs[i]){
-        bfree(ip->dev, ip->addrs[i]);
-        ip->addrs[i] = 0;
+      if (ip->size == 0) {
+          return;
       }
-    }
   
-    if(ip->addrs[NDIRECT]){
-      bp = bread(ip->dev, ip->addrs[NDIRECT]);
-      a = (uint*)bp->data;
-      for(j = 0; j < NINDIRECT; j++){
-        if(a[j])
-          bfree(ip->dev, a[j]);
-      }
-      brelse(bp);
-      bfree(ip->dev, ip->addrs[NDIRECT]);
-      ip->addrs[NDIRECT] = 0;
-    }
-    
-    // 处理双重间接块的截断
-    struct buf* bp1;
-    uint* a1;
-    if(ip->addrs[NDIRECT + 1]) {
-      bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
-      a = (uint*)bp->data;
-      for(i = 0; i < NADDR_PER_BLOCK; i++) {
-        if(a[i]) {
-          bp1 = bread(ip->dev, a[i]);
-          a1 = (uint*)bp1->data;
-          for(j = 0; j < NADDR_PER_BLOCK; j++) {
-            if(a1[j])
-              bfree(ip->dev, a1[j]);
+      // 处理直接块
+      for (i = 0; i < NDIRECT; i++) {
+          if (ip->addrs[i]) {
+              bfree(ip->dev, ip->addrs[i]);
+              ip->addrs[i] = 0;
           }
-          brelse(bp1);
-          bfree(ip->dev, a[i]);
-        }
       }
-      brelse(bp);
-      bfree(ip->dev, ip->addrs[NDIRECT + 1]);
-      ip->addrs[NDIRECT + 1] = 0;
-    }
-    
-    ip->size = 0;
-    iupdate(ip);
+  
+      // 处理单一间接块
+      if (ip->addrs[NDIRECT]) {
+          bp = bread(ip->dev, ip->addrs[NDIRECT]);
+          a = (uint *)bp->data;
+          for (j = 0; j < NINDIRECT; j++) {
+              if (a[j]) {
+                  bfree(ip->dev, a[j]);
+              }
+          }
+          brelse(bp);
+          bfree(ip->dev, ip->addrs[NDIRECT]);
+          ip->addrs[NDIRECT] = 0;
+      }
+  
+      // 处理双重间接块
+      if (ip->addrs[NDIRECT + 1]) {
+          bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+          a = (uint *)bp->data;
+          for (i = 0; i < NINDIRECT; i++) {
+              if (a[i]) {
+                  bp1 = bread(ip->dev, a[i]);
+                  a1 = (uint *)bp1->data;
+                  for (j = 0; j < NINDIRECT; j++) {
+                      if (a1[j]) {
+                          bfree(ip->dev, a1[j]);
+                      }
+                  }
+                  brelse(bp1);
+                  bfree(ip->dev, a[i]);
+                  a[i] = 0;
+              }
+          }
+          brelse(bp);
+          bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+          ip->addrs[NDIRECT + 1] = 0;
+      }
+  
+      ip->size = 0;
+      iupdate(ip);
   }
   ```
-
+  
   - 修改后的代码支持双重间接块的截断操作，确保当文件被删除或缩小时，所有分配的块都能被正确释放。
-
+  
   **目的**: 使得文件系统能够正确管理更大文件的块分配，并在文件被截断时释放所有相关的块。
 
-##### 3. `kernel/fs.h`中`NDIRECT`的修改
+##### 3. `kernel/fs.h`中的修改
 
-  - **原文件**: `#define NDIRECT 12`
-  - **修改后**: `#define NDIRECT 11`
-  - **目的**: 减少直接块的数量，从而为新增的双重间接块腾出空间。
-
-##### 4. 增加`NDINDIRECT`和`NADDR_PER_BLOCK`宏定义
-
-  - 修改后新增:
+  - 修改 fs.h 文件中的宏和 dinode 中 addrs 的大小，以及 file.h 文件中 inode 结构体中 addrs 的大小也要同步修改过来。这样做的目的是减少一个直接映射项，增加一个二级间接映射项。
 
     ```c
-    //kernel/fs.h
-    #define NDINDIRECT ((BSIZE / sizeof(uint)) * (BSIZE / sizeof(uint)))
-    #define NADDR_PER_BLOCK (BSIZE / sizeof(uint))
+    #define NDIRECT 11
+    #define NINDIRECT (BSIZE / sizeof(uint))
+    #define MAXFILE (NDIRECT + NINDIRECT + NINDIRECT * NINDIRECT)
+    
+    // On-disk inode structure
+    struct dinode {
+      short type;           // File type
+      short major;          // Major device number (T_DEVICE only)
+      short minor;          // Minor device number (T_DEVICE only)
+      short nlink;          // Number of links to inode in file system
+      uint size;            // Size of file (bytes)
+      uint addrs[NDIRECT+2];   // Data block addresses
+    };
     ```
 
-  - 目的:
-
-    - `NDINDIRECT` 用于定义双重间接块可以引用的总块数。
-- `NADDR_PER_BLOCK` 用于计算一个块中可以存储的地址数量。
-
-##### 5. 修改MAXFILE的计算
-
-- **原文件**: `#define MAXFILE (NDIRECT + NINDIRECT)`
-- **修改后**: `#define MAXFILE (NDIRECT + NINDIRECT + NDINDIRECT)`
-- **目的**: 将 `MAXFILE` 的计算范围扩展到包含双重间接块，这样可以支持更大的文件。
-
-##### 6. **增加Inode中`addrs`数组的大小**
-
-- **原文件**: `uint addrs[NDIRECT+1];`
-- **修改后**: `uint addrs[NDIRECT+2];`
-- **目的**: 扩展`addrs`数组的大小以支持双重间接块。
+    ```c
+    // in-memory copy of an inode
+    struct inode {
+      uint dev;           // Device number
+      uint inum;          // Inode number
+      int ref;            // Reference count
+      struct sleeplock lock; // protects everything below here
+      int valid;          // inode has been read from disk?
+     
+      short type;         // copy of disk inode
+      short major;
+      short minor;
+      short nlink;
+      uint size;
+      uint addrs[NDIRECT+2];
+    };
+    ```
 
   #### `kernel/fs.h`修改内容原理解释
 
@@ -277,9 +322,36 @@
 
   具体来说，双重间接块使用了两级索引来指向数据块。第一级索引块包含指向第二级索引块的地址，而第二级索引块又包含指向数据块的地址。这个设计允许文件系统支持极大的文件尺寸，符合更大数据需求的应用场景。
 
+
+
+##### 4. 实现`batch_balloc`函数
+
+* `batch_balloc` 函数的意图是一次性分配多个块，以减少 `balloc` 的调用次数，从而提高性能。这个函数会尝试为文件分配 `count` 个连续的块。如果分配成功，函数会返回第一个分配的块地址；如果失败，函数会释放已经分配的块并返回 `0`，表示分配失败。
+* 因为运行`make grade`的时候超时了哈哈。
+
+```c
+static uint 
+batch_balloc(int dev, int count) {
+    uint addrs[count]; // 创建一个临时数组用于存储分配的块地址
+    for (int i = 0; i < count; i++) {
+        addrs[i] = balloc(dev); // 分配一个块
+        if (addrs[i] == 0) { // 如果分配失败
+            // 回收之前分配的块
+            for (int j = 0; j < i; j++) {
+                bfree(dev, addrs[j]); // 释放之前分配的块
+            }
+            return 0; // 返回 0 表示分配失败
+        }
+    }
+    return addrs[0]; // 返回第一个分配的块地址
+}
+```
+
+
+
 #### 测试成功
 
-
+<img src="img/test-1.png" alt="test-1" style="zoom:67%;" />
 
 ### Symbolic links ([moderate](https://pdos.csail.mit.edu/6.828/2023/labs/guidance.html))
 
@@ -293,10 +365,11 @@
 
 #### 步骤
 
-**创建新系统调用：**
+##### 1. 创建新系统调用：
 
 - 为`symlink`创建一个新的系统调用编号，并在`user/usys.pl`和`user/user.h`中添加对应的条目。
 - 在`kernel/sysfile.c`中实现一个空的`sys_symlink`函数。
+- 在`kernel/syscall.h`中添加新的系统调用号。
 
 ```c
 // system calls
@@ -325,7 +398,7 @@ int uptime(void);
 int symlink(char*, char*);
 ```
 
-```c
+```perl
 entry("fork");
 entry("exit");
 entry("wait");
@@ -347,11 +420,15 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
-//here
+# here
 entry("symlink");
 ```
 
-**定义符号链接文件类型：**
+```c
+#define SYS_symlink 22
+```
+
+##### 2. 定义符号链接文件类型：
 
 - 在`kernel/stat.h`中添加一个新的文件类型`T_SYMLINK`，用于表示符号链接。
 
@@ -370,7 +447,7 @@ struct stat {
 };
 ```
 
-**添加新标志：**
+##### 3. 添加新标志：
 
 - 在`kernel/fcntl.h`中添加一个新的标志`O_NOFOLLOW`，用于`open`系统调用。当指定该标志时，`open`应该打开符号链接本身，而不是跟随符号链接指向的文件。确保该标志不会与现有标志冲突。
 
@@ -383,84 +460,70 @@ struct stat {
 #define O_NOFOLLOW 0x004    // lab 9.2
 ```
 
-**实现`symlink`系统调用：**
+##### 4. 实现`symlink`系统调用：
 
 - 在`path`位置创建一个新的符号链接，链接到`target`。符号链接的目标路径可以存储在inode的数据块中。
 - `symlink`应返回一个整数，表示成功（0）或失败（-1），类似于`link`和`unlink`系统调用。
 
 ```c
-// Create the path new as a link to the same inode as old.
-uint64
-sys_link(void)
+uint64 sys_symlink(void)
 {
-  char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
-  struct inode *dp, *ip;
-
-  if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
+  int n;
+  char target[MAXPATH];
+  char path[MAXPATH];
+  struct inode *ip;
+ 
+  if((n = argstr(0, target, MAXPATH)) < 0 || argstr(1, path, MAXPATH) < 0){
     return -1;
-
+  }
+ 
   begin_op();
-  if((ip = namei(old)) == 0){
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
     end_op();
     return -1;
   }
-
-  ilock(ip);
-  if(ip->type == T_DIR){
+ 
+  if(writei(ip, 0, (uint64)target, 0, MAXPATH) != MAXPATH){
     iunlockput(ip);
     end_op();
     return -1;
   }
-
-  ip->nlink++;
-  iupdate(ip);
-  iunlock(ip);
-
-  if((dp = nameiparent(new, name)) == 0)
-    goto bad;
-  ilock(dp);
-  if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
-    iunlockput(dp);
-    goto bad;
-  }
-  iunlockput(dp);
-  iput(ip);
-
-  end_op();
-
-  return 0;
-
-bad:
-  ilock(ip);
-  ip->nlink--;
-  iupdate(ip);
+ 
+ 
   iunlockput(ip);
   end_op();
-  return -1;
+ 
+  return 0;
 }
 ```
 
-**修改`open`系统调用：**
+##### 5. 修改`open`系统调用：
 
 - 修改`open`系统调用，以处理路径指向符号链接的情况。如果文件不存在，`open`应当失败。
 - 如果`open`指定了`O_NOFOLLOW`标志，应当打开符号链接本身，而不是跟随符号链接。
 - 如果符号链接指向的文件也是符号链接，必须递归地跟随直到达到非链接文件。如果符号链接形成了循环，应当返回错误代码。你可以通过设置一个递归深度的阈值（例如10）来近似处理这个问题。
 
 ```c
+#define MAX_SYMLINK_DEPTH 10
+
 uint64
 sys_open(void)
 {
   char path[MAXPATH];
+  char target[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
-  int n;
-
-  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+  struct inode *tip;
+  int n, depth;
+ 
+  argint(1, &omode);
+  if((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
-
+ 
   begin_op();
-
+ 
   if(omode & O_CREATE){
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
@@ -479,129 +542,66 @@ sys_open(void)
       return -1;
     }
   }
-
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  // handle the symlink - lab 9.2
-  if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
-    if((ip = follow_symlink(ip)) == 0) {
-      // 此处不用调用iunlockput()释放锁
-      // follow_symlinktest()返回失败时,锁在函数内已经被释放
+ 
+  depth = 0;
+  while(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+    if(readi(ip, 0, (uint64)target, 0, MAXPATH) != MAXPATH)
+      panic("open symlink: readi");
+ 
+    // the links form a cycle
+    if(strncmp(target, path, n) == 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+ 
+    // target file does not exist
+    if((tip = namei(target)) == 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+ 
+    iunlock(ip);
+    ilock(tip);
+    ip = tip;
+ 
+    depth++;
+    if(depth >= 10){
+      iunlockput(ip);
       end_op();
       return -1;
     }
   }
-
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
-      fileclose(f);
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-  } else {
-    f->type = FD_INODE;
-    f->off = 0;
-  }
-  f->ip = ip;
-  f->readable = !(omode & O_WRONLY);
-  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
-
-  if((omode & O_TRUNC) && ip->type == T_FILE){
-    itrunc(ip);
-  }
-
-  iunlock(ip);
-  end_op();
-
-  return fd;
-}
-
-// Generating symbolic links
-uint64 
-sys_symlink(void) {
-  char target[MAXPATH], path[MAXPATH];
-  struct inode *ip;
-  int n;
-
-  if ((n = argstr(0, target, MAXPATH)) < 0
-    || argstr(1, path, MAXPATH) < 0) {
-    return -1;
-  }
-
-  begin_op();
-  // create the symlink's inode
-  if((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
-    end_op();
-    return -1;
-  }
-  // write the target path to the inode
-  if(writei(ip, 0, (uint64)target, 0, n) != n) {
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  iunlockput(ip);
-  end_op();
-  return 0;
-}
+.....
+.....
 ```
 
-**确保其他系统调用的正确性：**
+##### 6. 添加到`Makefile`
 
-- 修改其他相关的系统调用（如`link`和`unlink`），使它们操作符号链接本身，而不是跟随符号链接指向的文件。
-
-```c
-// recursively follow the symlinks - lab9-2
-// Caller must hold ip->lock
-// and when function returned, it holds ip->lock of returned ip
-static struct inode* 
-follow_symlink(struct inode* ip) {
-  uint inums[NSYMLINK];
-  int i, j;
-  char target[MAXPATH];
-
-  for(i = 0; i < NSYMLINK; ++i) {
-    inums[i] = ip->inum;
-    // read the target path from symlink file
-    if(readi(ip, 0, (uint64)target, 0, MAXPATH) <= 0) {
-      iunlockput(ip);
-      printf("open_symlink: open symlink failed\n");
-      return 0;
-    }
-    iunlockput(ip);
-    
-    // get the inode of target path 
-    if((ip = namei(target)) == 0) {
-      printf("open_symlink: path \"%s\" is not exist\n", target);
-      return 0;
-    }
-    for(j = 0; j <= i; ++j) {
-      if(ip->inum == inums[j]) {
-        printf("open_symlink: links form a cycle\n");
-        return 0;
-      }
-    }
-    ilock(ip);
-    if(ip->type != T_SYMLINK) {
-      return ip;
-    }
-  }
-
-  iunlockput(ip);
-  printf("open_symlink: the depth of links reaches the limit\n");
-  return 0;
-}
+```makefile
+UPROGS=\
+	$U/_cat\
+	$U/_echo\
+	$U/_forktest\
+	$U/_grep\
+	$U/_init\
+	$U/_kill\
+	$U/_ln\
+	$U/_ls\
+	$U/_mkdir\
+	$U/_rm\
+	$U/_sh\
+	$U/_stressfs\
+	$U/_usertests\
+	$U/_grind\
+	$U/_wc\
+	$U/_zombie\
+# here
+	$U/_symlinktest\
 ```
+
+
 
 ### 实验得分
 
