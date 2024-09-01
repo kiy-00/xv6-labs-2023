@@ -17,8 +17,8 @@
 
 1. **获取并切换到`mmap`分支：** 打开终端，进入xv6的源代码目录，然后执行以下命令：
 
-   ```
-   bash复制代码$ git fetch
+   ```bash
+   $ git fetch
    $ git checkout mmap
    $ make clean
    ```
@@ -27,385 +27,275 @@
 
    - `mmap`系统调用的格式如下：
 
-     ```
-     c
-     复制代码
+     ```c
      void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
      ```
-
+     
      - `addr`为0时，内核决定映射文件的虚拟地址。
      - `len`是要映射的字节数。
      - `prot`表示内存是否应该映射为可读、可写或可执行。
      - `flags`可以是`MAP_SHARED`或`MAP_PRIVATE`。
      - `fd`是要映射的文件的文件描述符。
      - `offset`表示从文件的哪个位置开始映射，可以假设为0。
-
+     
    - `munmap`系统调用的格式如下：
 
-     ```
-     c
-     复制代码
+     ```c
      int munmap(void *addr, size_t len);
      ```
-
+     
      - `munmap`应该从指定的地址范围中移除`mmap`映射。
 
-### 实验任务
+### 实验步骤
 
-#### 1. **设置系统调用并编译**
+#### 1. `syscall.c`新增 `sys_mmap` 和 `sys_munmap` 函数原型的声明
 
-**任务描述：** 首先为`mmap`和`munmap`创建系统调用编号，并在`user/usys.pl`和`user/user.h`中添加对应的条目。然后在`kernel/sysfile.c`中实现一个空的`sys_mmap`和`sys_munmap`函数。这样你可以编译`mmaptest`测试程序，但最初的`mmap`调用会失败。
-
-**步骤：**
-
-1. 在`UPROGS`中添加`_mmaptest`。
-2. 在`kernel/sysfile.c`中实现`sys_mmap`和`sys_munmap`函数，暂时只返回错误。
-3. 编译并运行`mmaptest`，测试会在第一次`mmap`调用时失败。
-
-#### 2. **实现`mmap`的懒惰分配**
-
-**任务描述：** 为提高效率，`mmap`应当懒惰地填充页表，即`mmap`不应立即分配物理内存或读取文件，而是在发生页面错误时才处理。这确保了对大文件的`mmap`操作速度较快，并且可以映射大于物理内存的文件。
-
-**步骤：**
-
-1. 定义一个结构来记录每个进程的`mmap`映射，这个结构对应于“虚拟内存区域”（VMA）。
-2. 在`mmap`中找到进程地址空间中未使用的区域来映射文件，并将VMA添加到进程的映射区域表中。
-3. 在页面错误处理代码中，处理`mmap`的页面错误，分配物理内存并从文件中读取数据。
-
-#### 3. **实现`munmap`**
-
-**任务描述：** 实现`munmap`系统调用，查找对应地址范围的VMA并取消映射指定的页。如果该页已被修改且文件映射为`MAP_SHARED`，则将修改写回文件。
-
-**步骤：**
-
-1. 在`munmap`中查找对应的VMA，并使用`uvmunmap`取消映射指定的页。
-2. 如果取消映射的页已被修改并且文件映射为`MAP_SHARED`，则将页面写回文件。
-
-#### 4. **修改`exit`和`fork`**
-
-**任务描述：**
-
-- 在进程退出时（`exit`），像调用`munmap`一样取消进程的映射区域。
-- 修改`fork`，确保子进程与父进程具有相同的映射区域，并在页面错误处理时为子进程分配新的物理页。
-
-**步骤：**
-
-1. 在`exit`中取消进程的所有映射区域。
-2. 修改`fork`，确保子进程继承父进程的映射区域。
-
-### 代码编写
-
-* 接下来，我们来研究一下实现，首先我们需要一个结构体用来保存 mmap 的映射关系，也就是文档中的映射关系，用于在产生异常的时候映射与解除映射，我们添加了 `virtual_memory_area` 这个结构体:
+**修改前：**
 
 ```c
-// 记录 mmap 信息的结构体
-struct virtual_memory_area {
-    // 映射虚拟内存起始地址
-    uint64 start_addr;
-    // 映射虚拟内存结束地址
-    uint64 end_addr;
-    // 映射长度
-    uint64 length;
-    // 特权
-    int prot;
-    // 标志位
-    int flags;
-    // 文件描述符
-    // int fd;
-    struct file* file;
-    // 文件偏移量
-    uint64 offset;
+// 系统调用函数的原型声明
+extern uint64 sys_fork(void);
+extern uint64 sys_exit(void);
+extern uint64 sys_wait(void);
+// ... 省略其他函数声明
+extern uint64 sys_close(void);
+```
+
+**修改后：**
+
+```c
+// 系统调用函数的原型声明
+extern uint64 sys_fork(void);
+extern uint64 sys_exit(void);
+extern uint64 sys_wait(void);
+// ... 省略其他函数声明
+extern uint64 sys_close(void);
+extern uint64 sys_mmap(void);
+extern uint64 sys_munmap(void);
+```
+
+**修改目的和原理：**
+
+- 新增的 `sys_mmap` 和 `sys_munmap` 函数声明是为了引入对这两个新系统调用的支持。在后续的代码中，这两个函数会处理用户发出的 `mmap` 和 `munmap` 系统调用请求。
+
+#### 2. `syscall.c`扩展系统调用映射数组 `syscalls[]`
+
+**修改前：**
+
+```c
+// 系统调用号与对应处理函数的映射表
+static uint64 (*syscalls[])(void) = {
+[SYS_fork]    sys_fork,
+[SYS_exit]    sys_exit,
+[SYS_wait]    sys_wait,
+// ... 省略其他映射
+[SYS_close]   sys_close,
 };
 ```
 
-* 每个进程都需要有这样一个结构体用于记录信息，因此我们也需要在 `proc` 中添加这个结构体，由于其属于进程的私有域，所以不需要加锁访问。之后我们就将要去实现 `mmap` 系统调用:
+**修改后：**
 
 ```c
-uint64 sys_mmap(void) {
-  uint64 addr, length, offset;
-  int prot, flags, fd;
+// 系统调用号与对应处理函数的映射表
+static uint64 (*syscalls[])(void) = {
+[SYS_fork]    sys_fork,
+[SYS_exit]    sys_exit,
+[SYS_wait]    sys_wait,
+// ... 省略其他映射
+[SYS_close]   sys_close,
+[SYS_mmap]    sys_mmap,
+[SYS_munmap]  sys_munmap,
+};
+```
+
+**修改目的和原理：**
+
+- 在 `syscalls[]` 数组中新增了 `SYS_mmap` 和 `SYS_munmap` 的映射，这样在系统调用处理时，可以根据调用号正确地找到并执行对应的函数。这一步骤是实现新系统调用的关键，它将 `mmap` 和 `munmap` 系统调用与它们的处理函数关联起来，使得操作系统能够响应这些调用。
+
+#### 3. `syscall.h`添加系统调用号
+
+```c
+#define SYS_mmap 22
+#define SYS_munmap 23
+```
+
+#### 4.  `sysfile.c`新增的 `sys_mmap` 函数
+
+**修改后：**
+
+```c
+uint64 sys_mmap(void)
+{
+  uint64 addr;
+  int len, prot, flags, fd, off;
   argaddr(0, &addr);
-  argaddr(1, &length);
+  argint(1, &len);
   argint(2, &prot);
   argint(3, &flags);
   argint(4, &fd);
-  argaddr(5, &offset);
-  uint64 ret;
-  if((ret = (uint64)mmap((void*)addr, length, prot, flags, fd, offset)) < 0){
-    printf("[Kernel] fail to mmap.\n");
-    return -1;
-  }
-  return ret;
-}
+  argint(5, &off);
 
-void* mmap(void* addr, uint64 length, int prot, int flags, int fd, uint64 offset) {
-  // 此时应当从该进程中发现一块未被使用的虚拟内存空间
-  uint64 start_addr = find_unallocated_area(length);
-  if(start_addr == 0){
-    printf("[Kernel] mmap: can't find unallocated area");
-    return (void*)-1;
-  }
-  // 构造 mm_area
-  struct virtual_memory_area m;
-  m.start_addr = start_addr;
-  m.end_addr = start_addr + length;
-  m.length = length;
-  m.file = myproc()->ofile[fd];
-  m.flags = flags;
-  m.prot = prot;
-  m.offset = offset;
-  // 检查权限位是否满足映射要求
-  if((m.prot & PROT_WRITE) && (m.flags == MAP_SHARED) && (!m.file->writable)){
-    printf("[Kernel] mmap: prot is invalid.\n");
-    return (void*)-1;
-  }
-  // 增加文件的引用
-  struct file* f = myproc()->ofile[fd];
-  filedup(f);
-  // 将 mm_area 放入结构体中
-  if(push_mm_area(m) == -1){
-    printf("[Kernel] mmap: fail to push memory area.\n");
-    return (void*)-1;
-  }
-  return (void*)start_addr;
+  struct proc* p = myproc();
+  struct file* f = p->ofile[fd];
+  
+  // Check whether this operation is legal
+  if((flags==MAP_SHARED && f->writable==0 && (prot&PROT_WRITE))) return -1;
+
+  // Find an empty VMA struct. 
+  int idx = 0;
+  for(;idx<VMA_MAX;idx++)
+    if(p->vma_array[idx].valid==0)
+      break;
+  if(idx==VMA_MAX)
+    panic("All VMA struct is full!");
+  
+  // Fill this VMA struct.
+  struct vma* vp = &p->vma_array[idx];
+  vp->valid = 1;
+  vp->len = len;
+  vp->flags = flags;
+  vp->off = off;
+  vp->prot = prot;
+  vp->f = f;
+  filedup(f); // This file's refcnt += 1. 
+  p->vma_top_addr-=len;
+  vp->addr = p->vma_top_addr; // The usable user virtual address. 
+  return vp->addr;
 }
 ```
 
+**修改目的和原理：**
 
+- 该函数实现了 `mmap` 系统调用，允许用户将文件或设备的内容映射到虚拟内存区域。主要逻辑包括检查操作是否合法，查找可用的 VMA 结构体，填充 VMA 结构体信息，更新文件引用计数等。
+- 通过此修改，操作系统能够为用户提供高效的内存映射操作，减少用户态和内核态之间的数据拷贝，提高 I/O 性能。
 
-* 在实现中我们首先从虚拟内存域中找到一块可用的内存，然后不实际分配内存而只是构造 `virtual_memory_area` 结构体并将其存到进程的 `mm_area` 中去，然后增加文件引用并返回。如果用户程序访问这段内存，我们的操作系统将会触发异常并调用 `map_file` 来进行处理：
+#### 5. `sysfile.c`新增的 `sys_munmap` 函数
+
+**修改后：**
 
 ```c
-int map_file(uint64 addr) {
-    struct proc* p = myproc();
-    struct virtual_memory_area* mm_area = find_area(addr);
-    if(mm_area == 0){
-      printf("[Kernel] map_file: fail to find mm_area.\n");
-      return -1;
-    }
-    // 从文件中读一页的地址并映射到页中
-    char* page = kalloc();
-    // 将页初始化成0
-    memset(page, 0, PGSIZE);
-    if(page == 0){
-      printf("[Kernel] map_file: fail to alloc kernel page.\n");
-      return -1;
-    }
-    int flags = PTE_U;
-    if(mm_area->prot & PROT_READ){
-      flags |= PTE_R;
-    }
-    if(mm_area->prot & PROT_WRITE){
-      flags |= PTE_W;
-    }
-    if(mappages(p->pagetable, addr, PGSIZE, (uint64)page, flags) != 0) {
-      printf("[Kenrel] map_file: map page fail");
-      return -1;
-    }
+uint64 sys_munmap(void)
+{
+  uint64 addr;
+  int len;
+  argaddr(0, &addr);
+  argint(1, &len);
+  struct proc* p = myproc();
 
-    struct file* f = mm_area->file;
-    if(f->type == FD_INODE){
-      ilock(f->ip);
-      // printf("[Kernel] map_file: start_addr: %p, addr: %p\n", mm_area->start_addr, addr);
-      uint64 offset = addr - mm_area->start_addr;
-      if(readi(f->ip, 1, addr, offset, PGSIZE) == -1){
-        printf("[Kernel] map_file: fail to read file.\n");
-        iunlock(f->ip);
-        return -1;
-      }
-      // mm_area->offset += PGSIZE;
-      iunlock(f->ip);
+  struct vma* vp = 0;
+  // Find the VMA struct that this file belongs to. 
+  for(struct vma *now = p->vma_array;now<p->vma_array+VMA_MAX;now++)
+  {
+    if(now->addr<=addr && addr<now->addr+now->len 
+        && now->valid)
+    {
+      vp = now;
+      break;
+    }
+  }
+
+  if(vp)
+  {
+    if( walkaddr( p->pagetable , addr ) != 0)
+    {
+      // Write back and unmap. 
+      if(vp->flags==MAP_SHARED) filewrite(vp->f, addr, len);
+      uvmunmap(p->pagetable, addr, len/PGSIZE, 1);
       return 0;
     }
-    return -1;
-}
-```
-
-
-
-* 在此函数中我们检查权限位并实际分配物理内存并进行映射，随后将文件内容读入到内存中来。当用户态不再需要文件内容的时候就会调用 `munmap` 进行取消映射:
-
-```c
-uint64 sys_munmap(void){
-  uint64 addr, length;
-  argaddr(0, &addr);
-  argaddr(1, &length);
-  uint64 ret;
-  if((ret = munmap((void*)addr, length)) < 0){
-    return -1;
+    // Update the file's refcnt. 
+    vp->refcnt -= 1;
+    if(vp->refcnt) // set the vma struct to invalid. 
+    {
+      fileclose(vp->f);
+      vp->valid = 0;
+    }
+    return 0;
   }
-  return ret;
-}
-
-int munmap(void* addr, uint64 length){
-  // 找到地址对应的区域
-  struct virtual_memory_area* mm_area = find_area((uint64)addr);
-  // 根据地址进行切割，暂时进行简单地考虑
-  uint64 start_addr = PGROUNDDOWN((uint64)addr);
-  uint64 end_addr = PGROUNDUP((uint64)addr + length);
-  if(end_addr == mm_area->end_addr && start_addr == mm_area->start_addr){
-    struct file* f = mm_area->file;
-    if(mm_area->flags == MAP_SHARED && mm_area->prot & PROT_WRITE){
-      // 将内存区域写回文件
-      printf("[Kernel] start_addr: %p, length: 0x%x\n", mm_area->start_addr, mm_area->length);
-      if(filewrite(f, mm_area->start_addr, mm_area->length) < 0){
-        printf("[Kernel] munmap: fail to write back file.\n");
-        return -1;
-      }
-    }
-    // 对虚拟内存解除映射并释放
-    for(int i = 0; i < mm_area->length / PGSIZE; i++){
-      uint64 addr = mm_area->start_addr + i * PGSIZE;
-      uint64 pa = walkaddr(myproc()->pagetable, addr);
-      if(pa != 0){
-        uvmunmap(myproc()->pagetable, addr, PGSIZE, 1);
-      }
-    }
-    // 减去文件引用
-    fileclose(f);
-
-    // 将内存区域从表中删除
-    if(rm_area(mm_area) < 0){
-      printf("[Kernel] munmap: fail to remove memory area from table.\n");
-      return -1;
-    }
-    return 0;
-  }else if(end_addr <= mm_area->end_addr && start_addr >= mm_area->start_addr){
-    // 此时表示该区域只是一个子区域
-    struct file* f = mm_area->file;
-    if(mm_area->flags == MAP_SHARED && mm_area->prot & PROT_WRITE){
-      // 写回文件
-      // 获取偏移量
-      uint offset = start_addr - mm_area->start_addr;
-      uint len = end_addr - start_addr;
-      if(f->type == FD_INODE){
-        begin_op(f->ip->dev);
-        ilock(f->ip);
-        if(writei(f->ip, 1, start_addr, offset, len) < 0){
-          printf("[Kernel] munmap: fail to write back file.\n");
-          iunlock(f->ip);
-          end_op(f->ip->dev);
-          return -1;
-        }
-        iunlock(f->ip);
-        end_op(f->ip->dev);
-      }
-    }
-    // 对虚拟内存解除映射并释放
-    uint64 len = end_addr - start_addr;
-    for(int i = 0; i < len / PGSIZE; i++){
-      uint64 addr = start_addr + i * PGSIZE;
-      uint64 pa = walkaddr(myproc()->pagetable, addr);
-      if(pa != 0){
-        uvmunmap(myproc()->pagetable, addr, PGSIZE, 1);
-      }
-    }
-    // 修改 mm_area 结构体
-    if(start_addr == mm_area->start_addr) {
-      mm_area->offset = end_addr - mm_area->start_addr;
-      mm_area->start_addr = end_addr;
-      mm_area->length = mm_area->end_addr - mm_area->start_addr;
-    }else if(end_addr == mm_area->end_addr){
-      mm_area->end_addr = start_addr;
-      mm_area->length = mm_area->end_addr - mm_area->start_addr;
-    }else{
-      // 此时需要进行分块
-      panic("[Kernel] munmap: no implement!\n");
-    }
-    return 0;
-  }else if(end_addr > mm_area->end_addr){
-    panic("[Kernel] munmap: out of current range.\n");
-  }else{
-    panic("[Kernel] munmap: unresolved solution.\n");
+  else
+  {
+    panic("Cannot find a vma struct representing this file!");
   }
 }
 ```
 
+**修改目的和原理：**
 
+- 该函数实现了 `munmap` 系统调用，用于解除内存映射。主要逻辑包括查找对应的 VMA 结构体，进行写回操作（如果映射是共享的），解除映射并更新 VMA 结构体的状态。
+- 通过此修改，操作系统能够正确处理用户请求的内存解除映射操作，释放内存资源并确保数据一致性。
 
-* 在 `munmap` 中我们判断是否写回页面并取消映射，减少文件引用。注意这里需要根据系统调用的地址和长度来判断不同的取消映射方式，一共有三种情况：
+#### 6. ``proc.c在 `allocproc` 函数中初始化 VMA 结构
 
-  - 要取消映射区间的一个端点或者两个端点与内存区域重合
-
-  - 要取消映射区间的两个端点都在内存区域范围内
-
-  - 要取消映射区间的一个端点或者两个端点在内存区域外
-
-
-在最后我们需要在 `exit` 的时候对所有内存取消映射和对文件减少引用；在 `fork` 的时候子进程需要从父进程这里拿到 `mm_area` 并对文件增加引用:
+**修改后：**
 
 ```c
-void
-exit(int status)
+// Look in the process table for an UNUSED proc.
+// If found, initialize state required to run in the kernel,
+// and return with p->lock held.
+// If there are no free procs, or a memory allocation fails, return 0.
+static struct proc*
+allocproc(void)
 {
-  struct proc *p = myproc();
+  struct proc *p;
 
-  if(p == initproc)
-    panic("init exiting");
-
-  // Close all open files.
-  for(int fd = 0; fd < NOFILE; fd++){
-    if(p->ofile[fd]){
-      struct file *f = p->ofile[fd];
-      fileclose(f);
-      p->ofile[fd] = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == UNUSED) {
+      goto found;
+    } else {
+      release(&p->lock);
     }
   }
+  return 0;
 
-  // 释放所有 mmap 区域的内存
-  for(int i = 0; i < MM_SIZE; i++){
-    if(p->mm_area[i].start_addr != 0){
-      munmap((void*)p->mm_area[i].start_addr, p->mm_area[i].length);
-    }
+found:
+  p->pid = allocpid();
+  p->state = USED;
+
+  // Initialize the vma array and the currently available VMA top address. 
+  for(int i = 0;i<VMA_MAX;i++)
+  {
+     p->vma_array[i].valid = 0;
+     p->vma_array[i].refcnt = 0;
+  }
+  p->vma_top_addr = MAXVA-2*PGSIZE;
+
+  // Allocate a trapframe page.
+  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
   }
 
-  begin_op(ROOTDEV);
-  iput(p->cwd);
-  end_op(ROOTDEV);
-  p->cwd = 0;
+  // An empty user page table.
+  p->pagetable = proc_pagetable(p);
+  if(p->pagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
 
-  // we might re-parent a child to init. we can't be precise about
-  // waking up init, since we can't acquire its lock once we've
-  // acquired any other proc lock. so wake up init whether that's
-  // necessary or not. init may miss this wakeup, but that seems
-  // harmless.
-  acquire(&initproc->lock);
-  wakeup1(initproc);
-  release(&initproc->lock);
+  // Set up new context to start executing at forkret,
+  // which returns to user space.
+  memset(&p->context, 0, sizeof(p->context));
+  p->context.ra = (uint64)forkret;
+  p->context.sp = p->kstack + PGSIZE;
 
-  // grab a copy of p->parent, to ensure that we unlock the same
-  // parent we locked. in case our parent gives us away to init while
-  // we're waiting for the parent lock. we may then race with an
-  // exiting parent, but the result will be a harmless spurious wakeup
-  // to a dead or wrong process; proc structs are never re-allocated
-  // as anything else.
-  acquire(&p->lock);
-  struct proc *original_parent = p->parent;
-  release(&p->lock);
-
-  // we need the parent's lock in order to wake it up from wait().
-  // the parent-then-child rule says we have to lock it first.
-  acquire(&original_parent->lock);
-
-  acquire(&p->lock);
-
-  // Give any children to init.
-  reparent(p);
-
-  // Parent might be sleeping in wait().
-  wakeup1(original_parent);
-
-  p->xstate = status;
-  p->state = ZOMBIE;
-
-  release(&original_parent->lock);
-
-
-  // Jump into the scheduler, never to return.
-  sched();
-  panic("zombie exit");
+  return p;
 }
+```
 
+**修改目的和原理：**
+
+- 在 `allocproc` 函数中初始化 VMA 结构 (`vma_array`) 和 VMA 顶部地址 (`vma_top_addr`)，确保每个新创建的进程在分配虚拟内存区域时能够正常工作。这样，进程可以使用 `mmap` 进行文件映射，并在 `munmap` 时正确解除映射。
+
+#### 7. `proc.c`在 `fork` 函数中复制 VMA 结构
+
+**修改后：**
+
+```c
+// Create a new process, copying the parent.
+// Sets up child kernel stack to return as if from fork() system call.
 int
 fork(void)
 {
@@ -426,13 +316,23 @@ fork(void)
   }
   np->sz = p->sz;
 
-  np->parent = p;
-
   // copy saved user registers.
-  *(np->tf) = *(p->tf);
+  *(np->trapframe) = *(p->trapframe);
+
+  // Added by XHZ
+  // Copy the struct vma array. 
+  np->vma_top_addr = p->vma_top_addr;
+  for(int i = 0;i<VMA_MAX;i++)
+  {
+    if(p->vma_array[i].valid)
+    {
+      filedup(p->vma_array[i].f);
+      memmove(&np->vma_array[i], &p->vma_array[i], sizeof(struct vma));
+    }
+  }
 
   // Cause fork to return 0 in the child.
-  np->tf->a0 = 0;
+  np->trapframe->a0 = 0;
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -440,27 +340,216 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
-  // 复制 mmap 结构体
-  for(int i = 0; i < MM_SIZE; i++){
-    if(p->mm_area[i].start_addr != 0){
-      np->mm_area[i] = p->mm_area[i];
-      // 增加文件引用
-      filedup(p->mm_area[i].file);
-    }
-  }
-
-
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
 
-  np->state = RUNNABLE;
+  release(&np->lock);
 
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = RUNNABLE;
   release(&np->lock);
 
   return pid;
 }
 ```
 
+**修改目的和原理：**
+
+- 在 `fork` 函数中，父进程的 VMA 结构被复制到子进程中，以确保子进程继承父进程的所有内存映射。这包括更新 VMA 顶部地址和增加文件引用计数，确保子进程对映射文件的访问权限与父进程相同。
+
+#### 8. `proc.c`在 `exit` 函数中释放 VMA 结构
+
+**修改后：**
+
+```c
+// Exit the current process.  Does not return.
+// An exited process remains in the zombie state
+// until its parent calls wait().
+void
+exit(int status)
+{
+  struct proc *p = myproc();
+
+  // Release the mapped files in the virtual memory. 
+  for(int i = 0;i<VMA_MAX;i++)
+  {
+    if(p->vma_array[i].valid)
+    {
+      struct vma* vp = &p->vma_array[i];
+      for(uint64 addr = vp->addr;addr<vp->addr+vp->len;addr+=PGSIZE)
+      {
+        if(walkaddr(p->pagetable, addr) != 0)
+        {
+          if(vp->flags==MAP_SHARED) filewrite(vp->f, addr, PGSIZE);
+          uvmunmap(p->pagetable, addr, 1, 1);
+        }
+      }
+      fileclose(p->vma_array[i].f);
+      p->vma_array[i].valid = 0;
+    }
+  }
+
+  if(p == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(int fd = 0; fd < NOFILE; fd++){
+    if(p->ofile[fd]){
+      struct file *f = p->ofile[fd];
+      fileclose(f);
+      p->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  iput(p->cwd);
+  end_op();
+  p->cwd = 0;
+
+  acquire(&wait_lock);
+
+  // Give any children to init.
+  reparent(p);
+
+  // Parent might be sleeping in wait().
+  wakeup(p->parent);
+  
+  acquire(&p->lock);
+
+  p->xstate = status;
+  p->state = ZOMBIE;
+
+  release(&wait_lock);
+
+  // Jump into the scheduler, never to return.
+  sched();
+  panic("zombie exit");
+}
+```
+
+**修改目的和原理：**
+
+- 在 `exit` 函数中，进程退出时需要释放其所有的 VMA 结构。这包括写回共享映射的文件数据、解除映射并关闭文件。这一步骤确保了进程退出后，所有与之关联的内存资源和文件资源都能被正确释放，避免内存泄漏和文件引用计数不正确的问题。
+
+
+
+#### 9. `proc.h`新增`struct vma` 的定义
+
+**修改前：**
+
+```c
+// 没有 vma 结构的定义
+```
+
+**修改后：**
+
+```c
+// 虚拟内存映射结构
+struct vma {
+   int valid;           // 该 VMA 是否有效
+   uint64 addr;         // VMA 的起始地址
+   int len;             // VMA 的长度
+   int prot;            // 保护标志 (PROT_READ, PROT_WRITE 等)
+   int flags;           // 映射标志 (MAP_SHARED, MAP_PRIVATE 等)
+   int off;             // 文件偏移量
+   struct file* f;      // 关联的文件指针
+   uint64 refcnt;       // 引用计数
+};
+
+#define VMA_MAX 16  // 最大支持的 VMA 数量
+```
+
+**修改目的和原理：**
+
+- 新增了 `struct vma` 结构来支持虚拟内存区域的管理。每个进程可以有多个 VMA，这些 VMA 可以映射到文件或设备，或者用于共享内存等。这是实现 `mmap` 和 `munmap` 系统调用所需的关键数据结构。
+
+#### 10. `proc.h`中`struct proc` 中新增 VMA 支持
+
+**修改前：**
+
+```c
+// Per-process state
+struct proc {
+  struct spinlock lock;
+
+  // p->lock must be held when using these:
+  enum procstate state;        // Process state
+  void *chan;                  // If non-zero, sleeping on chan
+  int killed;                  // If non-zero, have been killed
+  int xstate;                  // Exit status to be returned to parent's wait
+  int pid;                     // Process ID
+
+  // wait_lock must be held when using this:
+  struct proc *parent;         // Parent process
+
+  // these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+};
+```
+
+**修改后：**
+
+```c
+// Per-process state
+struct proc {
+  struct spinlock lock;
+
+  // p->lock must be held when using these:
+  enum procstate state;        // Process state
+  void *chan;                  // If non-zero, sleeping on chan
+  int killed;                  // If non-zero, have been killed
+  int xstate;                  // Exit status to be returned to parent's wait
+  int pid;                     // Process ID
+
+  // wait_lock must be held when using this:
+  struct proc *parent;         // Parent process
+
+  // these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+
+  // 新增的 VMA 支持
+  struct vma vma_array[VMA_MAX];  // 该进程的 VMA 数组
+  uint64 vma_top_addr;            // 当前可用的 VMA 顶部地址
+};
+```
+
+**修改目的和原理：**
+
+- 在 `struct proc` 中新增了 `vma_array` 和 `vma_top_addr` 两个字段。`vma_array` 用于存储进程的所有 VMA 信息，而 `vma_top_addr` 用于管理 VMA 的顶端地址。这些修改允许每个进程管理多个虚拟内存映射，支持更复杂的内存操作。
+
+#### 11. `user.h`新增`mmap`和`munmap`的声明
+
+```c
+char *mmap(void *, size_t, int, int, int, off_t);
+int munmap(void *, size_t);
+```
+
+#### 12. `usys.pl`新增两个新的系统调用的入口
+
+```perl
+entry("mmap");
+entry("munmap");
+```
+
 ### 实验得分
 
+<img src="img/score.png" alt="score" style="zoom:67%;" />
