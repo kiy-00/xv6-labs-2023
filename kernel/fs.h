@@ -5,6 +5,12 @@
 #define ROOTINO  1   // root i-number
 #define BSIZE 1024  // block size
 
+#define NDIRECT 11
+#define NINDIRECT (BSIZE / sizeof(uint))
+#define NDINDIRECT ((BSIZE / sizeof(uint)) * (BSIZE / sizeof(uint)))
+#define MAXFILE (NDIRECT + NINDIRECT + NDINDIRECT)
+#define NADDR_PER_BLOCK (BSIZE / sizeof(uint))  // 一个块中的地址数量
+
 // Disk layout:
 // [ boot block | super block | log | inode blocks |
 //                                          free bit map | data blocks]
@@ -24,21 +30,6 @@ struct superblock {
 
 #define FSMAGIC 0x10203040
 
-// +-----+
-// |     | <- DIRECT
-// +-----+
-// | ... | <- DIRECT
-// +-----+
-// |     | <- DIRECT
-// +-----+
-// |     | <- INDIRECT
-// +-----+
-// |     | <- DBL_INDIRECT
-// +-----+
-#define NDIRECT 11
-#define NINDIRECT (BSIZE / sizeof(uint))
-#define NDBL_INDIRECT (NINDIRECT * NINDIRECT)
-#define MAXFILE (NDIRECT + NINDIRECT + NDBL_INDIRECT)
 
 // On-disk inode structure
 struct dinode {
@@ -70,5 +61,3 @@ struct dirent {
   char name[DIRSIZ];
 };
 
-// the max depth of symlinks - lab 9.2
-#define NSYMLINK 10
