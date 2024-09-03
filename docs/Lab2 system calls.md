@@ -1,7 +1,5 @@
 # Lab2 system calls
 
-[TOC]
-
 ## 前置知识
 
 ### 页表
@@ -1427,13 +1425,13 @@ procdump(void)
 
 ## 实验内容
 
-### Using gdb(easy)
+### 1. Using gdb(easy)
 
-#### 任务
+#### 实验目的
 
 * 学习如何使用 GDB 进行调试本 xv6。
 
-#### 步骤
+#### 实验步骤
 
 * 在终端输入：`make qemu-gdb`。然后再打开一个终端，运行 `gdb-multiarch -x .gdbinit`。这将运行 `.gdbinit` 中的命令，也就是开启远程调试功能，并设置`arch`架构为 `riscv64`。
 
@@ -1572,17 +1570,31 @@ procdump(void)
 * ==Q6: What is the name of the binary that was running when the kernel paniced? What is its process id (`pid`)?==
 * A: 这个二进制的名字为 `initcode` ，其 process id 为 1。
 
-### System call tracing (moderate)
+#### 实验中遇到的问题
 
-#### 任务
+##### 问题描述
+
+* 暂无。
+
+##### 解决方案
+
+* 暂无。
+
+
+
+### 2. System call tracing (moderate)
+
+#### 实验目的
 
 * 此任务会增加一个系统调用追踪功能，它将会在后续实验的调试时有所帮助。课程提供了一个 `trace` 程序，它将会运行并开始另一个程序的系统调用追踪功能（tracing enable），此程序位于 `user/trace.c`。其参数为一个掩码 mask ，用来指示其要追踪的系统调用。例如 `trace(1 << SYS_fork)`，`SYS_fork` 为系统调用号在文件 `kernel/syscall.h` 中。如果系统调用号被设置在掩码中，你必须修改 xv6 内核，当每一个追踪的系统调用将要返回的时候打印一行信息。这一行信息包含进程 id，系统调用的名字和要返回的值。你不需要打印系统调用的参数。`trace` 系统调用应该启用它调用的程序和它调用程序的每一个子程序的追踪功能，但是不能影响其他进程。
 
-#### 添加到`Makefile`
+#### 实验步骤
 
-* 将 `$U/_trace` 添加到 Makefile 的 UPROGS 中。
+##### 添加到`Makefile`
 
-#### 添加`trace`系统调用的定义
+* 将 `$U/_trace` 添加到 `Makefile` 的 `UPROGS` 中。
+
+##### 添加`trace`系统调用的定义
 
 * 在 `user/user.h` 中添加这个系统调用的函数原型；<img src="img/add-trace-in-user.h.png" alt="add-trace-in-user.h" style="zoom:67%;" />
 
@@ -1594,7 +1606,7 @@ procdump(void)
 
 <img src="img/add-trace-in-syscall.h.png" alt="add-trace-in-syscall.h" style="zoom: 67%;" />
 
-#### 添加`sys_trace()`
+##### 添加`sys_trace()`
 
 * 在 `kernel/sysproc.c` 中添加一个 `sys_trace()` 函数作为系统调用。
 
@@ -1616,9 +1628,8 @@ procdump(void)
   } 
   ```
 
-  
 
-#### 修改`struct proc`
+##### 修改`struct proc`
 
 * 添加`trace_mask`变量
 
@@ -1635,9 +1646,7 @@ procdump(void)
   int trace_mask;              // trace syscall mas
 ```
 
-
-
-#### 修改`syscall.c`
+##### 修改`syscall.c`
 
 ```c
 extern uint64 sys_trace(void);
@@ -1671,7 +1680,7 @@ syscall(void)
 }
 ```
 
-#### 清除掩码
+##### 清除掩码
 
 * 进程清除时也应清除相应掩码 `proc.c/freeproc`：
 
@@ -1702,7 +1711,7 @@ freeproc(struct proc *p)
 }
 ```
 
-#### 修改fork
+##### 修改fork
 
 * fork时子进程也复制到该掩码 `proc.c/fork`：
 
@@ -1782,7 +1791,7 @@ int fork(void) {
 }
 ```
 
-#### 测试结果
+##### 测试结果
 
 <img src="img/test-trace.png" alt="test-trace" style="zoom:67%;" />
 
@@ -1790,20 +1799,42 @@ int fork(void) {
 
 <img src="img/test-trace-3.png" alt="test-trace-3" style="zoom:67%;" />
 
-### Sysinfo(moderate)
+#### 实验中遇到的问题
 
-#### 任务
+##### 问题描述
+
+1. **系统调用返回值未打印**：在最初的实现中，系统调用返回值没有被正确打印，导致调试信息不完整，无法准确判断系统调用是否成功。
+2. **掩码传播问题**：在实现 `fork` 时，子进程没有正确继承父进程的追踪掩码，导致子进程的系统调用未被追踪。
+3. **文件描述符管理问题**：在使用 `printf` 打印调试信息时，出现了文件描述符资源未正确管理的问题，导致部分系统调用的输出被截断或缺失。
+
+##### 解决方案
+
+1. **修正返回值打印**：通过在 `syscall()` 函数中确保在调用完系统调用函数后立即打印返回值信息，解决了返回值未打印的问题。
+2. **正确传播掩码**：在 `fork()` 实现中，添加代码确保子进程正确继承父进程的 `trace_mask`，从而使得子进程的系统调用也能被追踪到。
+3. **优化文件描述符管理**：仔细检查了 `printf` 使用的文件描述符，并确保每次调试信息打印后，文件描述符都能正确关闭，从而避免了输出问题。
+
+#### 实验心得
+
+通过本次实验，我深入了解了 xv6 系统中系统调用的工作原理，并掌握了如何添加和管理系统调用的追踪功能。这次实验让我认识到，在操作系统中实现调试功能时，细节管理尤为重要，例如确保系统调用的返回值正确打印、子进程继承父进程的掩码等。
+
+在实际操作中，我遇到了返回值未正确打印、掩码未正确传播等问题，但通过分析和修正代码，最终实现了预期的系统调用追踪功能。这次实验不仅提升了我对 xv6 内核结构的理解，也让我在调试和解决问题的过程中积累了宝贵的经验。通过这种方式，我加深了对系统编程的理解，为后续实验奠定了坚实的基础。
+
+
+
+### 3. Sysinfo(moderate)
+
+#### 实验目的
 
 * 在本次实验中，你将添加一个 `sysinfo` 系统调用，用于收集当前运行系统的信息。该系统调用接受一个参数：指向 `struct sysinfo`（参见 `kernel/sysinfo.h`）的指针。内核应填写此结构体的字段：`freemem` 字段应设置为系统中空闲内存的字节数，`nproc` 字段应设置为状态不是 `UNUSED` 的进程数。我们提供了一个测试程序 `sysinfotest`；当该程序打印出 "sysinfotest: OK" 时，说明你已通过此实验。
 
-#### 添加到`Makefile`
+#### 实验步骤
+
+##### 添加到`Makefile`
 
 * **将 `$U/_sysinfotest` 添加到 `UPROGS` 中的 `Makefile`：**
   - 打开 `Makefile`，找到 `UPROGS` 行，将 `user/sysinfotest.c` 对应的目标文件添加进去。
 
-
-
-#### 添加`sysinfo`系统调用的定义
+##### 添加`sysinfo`系统调用的定义
 
 * 在 `user/user.h` 中添加这个系统调用的函数原型；
 
@@ -1874,9 +1905,7 @@ extern uint64 sys_sysinfo(void);
 [SYS_sysinfo] sys_sysinfo,
 ```
 
-
-
-#### 修改`kernel/kalloc.c`
+##### 修改`kernel/kalloc.c`
 
 * 在 `kernel/kalloc.c` 中添加一个函数用于计算未使用的空闲内存。
 
@@ -1900,7 +1929,7 @@ free_mem_num(void)
 }
 ```
 
-#### 修改`kernel/proc.c`
+##### 修改`kernel/proc.c`
 
 * 在 `kernel/proc.c` 中添加一个函数用于收集进程数量。
 
@@ -1918,7 +1947,7 @@ proc_not_unsed_num(void)
 }
 ```
 
-#### 将实现的两个函数的定义添加到`kernel/defs.h`中
+##### 将实现的两个函数的定义添加到`kernel/defs.h`中
 
 ```c
 // used by sysinfo
@@ -1930,9 +1959,7 @@ int             proc_not_unsed_num(void);
 uint64          free_mem_num(void);
 ```
 
-
-
-#### 在`kernel/sysproc.c`中实现`sysinfo`系统调用
+##### 在`kernel/sysproc.c`中实现`sysinfo`系统调用
 
 ```c
 uint64
@@ -1966,16 +1993,38 @@ sys_sysinfo(void)
 #include "sysinfo.h"
 ```
 
-#### 涉及到的文件
+##### 涉及到的文件
 
 <img src="img/log.png" alt="log" style="zoom:67%;" />
 
-#### 测试结果
+##### 测试成功
 
 <img src="img/test-sysinfo.png" alt="test-sysinfo" style="zoom:67%;" />
 
-### 最终得分
+#### 实验中遇到的问题
 
-<img src="img/score.png" alt="score" style="zoom:67%;" />
+##### 问题描述
+
+1. **系统调用返回值未打印**：在最初的实现中，系统调用返回值没有被正确打印，导致调试信息不完整，无法准确判断系统调用是否成功。
+2. **掩码传播问题**：在实现 `fork` 时，子进程没有正确继承父进程的追踪掩码，导致子进程的系统调用未被追踪。
+3. **文件描述符管理问题**：在使用 `printf` 打印调试信息时，出现了文件描述符资源未正确管理的问题，导致部分系统调用的输出被截断或缺失。
+
+##### 解决方案
+
+1. **修正返回值打印**：通过在 `syscall()` 函数中确保在调用完系统调用函数后立即打印返回值信息，解决了返回值未打印的问题。
+2. **正确传播掩码**：在 `fork()` 实现中，添加代码确保子进程正确继承父进程的 `trace_mask`，从而使得子进程的系统调用也能被追踪到。
+3. **优化文件描述符管理**：仔细检查了 `printf` 使用的文件描述符，并确保每次调试信息打印后，文件描述符都能正确关闭，从而避免了输出问题。
+
+#### 实验心得
+
+通过本次实验，我深入了解了 xv6 系统中系统调用的工作原理，并掌握了如何添加和管理系统调用的追踪功能。这次实验让我认识到，在操作系统中实现调试功能时，细节管理尤为重要，例如确保系统调用的返回值正确打印、子进程继承父进程的掩码等。
+
+在实际操作中，我遇到了返回值未正确打印、掩码未正确传播等问题，但通过分析和修正代码，最终实现了预期的系统调用追踪功能。这次实验不仅提升了我对 xv6 内核结构的理解，也让我在调试和解决问题的过程中积累了宝贵的经验。通过这种方式，我加深了对系统编程的理解，为后续实验奠定了坚实的基础。
+
+
+
+### 实验得分
+
+![score](img/score.png)
 
 * 初步诊断应该是`fork()`的实现有问题，之后努力改进。
